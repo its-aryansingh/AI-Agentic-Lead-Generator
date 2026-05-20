@@ -1,9 +1,12 @@
 # AGENTS.md — LeadGenAI Universal Context Document
 
-> **If you are an AI assistant reading this file:** Start here before touching any code.
-> Read the entire document. Acknowledge it in your internal scratchpad. Then proceed.
-> This file is the single source of truth for every AI model working on this codebase,
-> regardless of which tool you are (Claude Code, Copilot, Gemini, Cursor, etc.).
+> **⚠️ UPDATED 2026-05-21: `COORDINATION.md` (project root) is now the master context file.**
+> **Read `COORDINATION.md` FIRST. It supersedes this file on any conflict.**
+> **This file remains valid as a secondary reference but is no longer the primary source of truth.**
+
+> **If you are an AI assistant reading this file:** After reading this, immediately read `COORDINATION.md`.
+> That file has the full Claude.ai session history, current status, task queue, action log,
+> and multi-agent coordination protocol for Claude CLI, Antigravity CLI, and Codex.
 
 ---
 
