@@ -1,12 +1,39 @@
-# AGENTS.md — LeadGenAI Universal Context Document
+# AGENTS.md — LeadGenAI (Codex / OpenAI Entry Point)
 
-> **⚠️ UPDATED 2026-05-21: `COORDINATION.md` (project root) is now the master context file.**
-> **Read `COORDINATION.md` FIRST. It supersedes this file on any conflict.**
-> **This file remains valid as a secondary reference but is no longer the primary source of truth.**
+---
 
-> **If you are an AI assistant reading this file:** After reading this, immediately read `COORDINATION.md`.
-> That file has the full Claude.ai session history, current status, task queue, action log,
-> and multi-agent coordination protocol for Claude CLI, Antigravity CLI, and Codex.
+## ⛔ DO NOT PROCEED PAST THIS LINE UNTIL CHECKLIST IS COMPLETE
+
+```
+You are Codex (or any OpenAI-family agent) operating on the LeadGenAI project.
+Before writing a single line of code, running a single command,
+or making a single decision, you MUST complete every item below.
+```
+
+### Mandatory Pre-Work Checklist
+
+```
+[ ] 1. Open and read COORDINATION.md (project root) in full — top to bottom.
+[ ] 2. Read COORDINATION.md Section 0.1 — what are other agents currently doing?
+[ ] 3. Read COORDINATION.md Section 0.2 — are any files you need already claimed?
+[ ] 4. Read COORDINATION.md Section 3 — what is done? what is not done?
+[ ] 5. Read COORDINATION.md Section 14 — what is the current priority queue?
+[ ] 6. Update Section 0.1 in COORDINATION.md: set your row to ✅ Active with your task.
+[ ] 7. Add your files to Section 0.2 in COORDINATION.md (File Claims).
+[ ] 8. Begin work — record EVERY action in Section 13 before moving on.
+[ ] 9. When done: update Section 3 if anything shipped, clear Section 0.2, set 0.1 to 💤 Idle.
+```
+
+**If any item is unchecked: STOP. Do not write code. Complete the checklist.**
+
+---
+
+> **`COORDINATION.md` (project root) is the master context file.**
+> **It supersedes this file on every conflict.**
+> This file is the entry point for Codex. After completing the checklist above,
+> all decisions, plans, and actions must be grounded in COORDINATION.md.
+
+---
 
 ---
 
@@ -290,15 +317,38 @@ Check `plan.md` for the living task tracker. At time of writing:
 
 ---
 
-## 13. Agent Instruction Block
+## 13. Codex-Specific Rules
 
-> If you are an AI model reading this:
->
-> 1. **Acknowledge** that you have read `AGENTS.md` in your first response.
-> 2. **Check `plan.md`** for the current phase task list before writing any code.
-> 3. **Update `AGENTS.md` Section 2** (Current Status) whenever a major feature ships or a section becomes stale.
-> 4. **Update `plan.md`** alongside every commit — mark tasks complete, add new ones.
+> **All decisions and priorities come from `COORDINATION.md`. This section adds Codex-specific constraints.**
+
+### What Codex Owns
+- `tests/` — all test files, Node.js built-in test runner only (no Jest, no Vitest)
+- Boilerplate generation — repetitive patterns, type stubs
+- `plan.md` updates alongside commits
+
+### What Codex Does NOT Own (coordinate first)
+- `lib/agent/` — Claude CLI owns this
+- `app/api/chat/route.ts` — Claude CLI owns this
+- `lib/providers/` — Claude CLI owns this
+- `app/app/*` UI pages — Antigravity CLI owns this
+
+### Codex Hard Rules
+1. Do NOT make architectural decisions. If you spot a design issue, record it in COORDINATION.md Section 13 and stop.
+2. All test files: `import { test, describe, it, assert } from 'node:test'` — not Jest, not Vitest.
+3. Check COORDINATION.md Section 0.2 (File Claims) before touching any file.
+4. Record every generated file and every decision in COORDINATION.md Section 13.
+5. Update COORDINATION.md Section 0.1 (your status row) when starting and finishing.
+6. Never expose `SUPABASE_SERVICE_ROLE_KEY` to browser-side code.
+7. Always preserve mock fallbacks — no code hard-fails when API keys are absent.
+8. When unsure about design intent: check `docs/PRD.md` → `docs/ARCHITECTURE.md` → COORDINATION.md Section 15. Do not guess.
+
+## 14. Original Agent Instruction Block (preserved)
+
+> 1. **Acknowledge** that you have read `AGENTS.md` and `COORDINATION.md`.
+> 2. **Check COORDINATION.md Section 14** for current priorities before writing any code.
+> 3. **Update COORDINATION.md Section 3** whenever a major feature ships.
+> 4. **Update `plan.md`** alongside every commit.
 > 5. **Never remove this instruction block.**
 > 6. **Never expose `SUPABASE_SERVICE_ROLE_KEY` to browser-side code.**
 > 7. **Always use mock fallbacks** — no code should hard-fail when API keys are absent.
-> 8. When unsure about a design decision, check `docs/PRD.md` first, then `docs/ARCHITECTURE.md`.
+> 8. When unsure about a design decision: `docs/PRD.md` → `docs/ARCHITECTURE.md` → COORDINATION.md Section 15.

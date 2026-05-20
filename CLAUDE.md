@@ -1,52 +1,91 @@
 # CLAUDE.md — Claude CLI Auto-Load Context
 # LeadGenAI
 
-> This file is auto-loaded by Claude CLI at session start.
-> Read COORDINATION.md immediately after this file — it is the master context.
+---
 
-## Your First 3 Steps Every Session
+## ⛔ DO NOT PROCEED PAST THIS LINE UNTIL CHECKLIST IS COMPLETE
 
-1. **Read `COORDINATION.md`** (root of repo) — the single source of truth for all agents.
-2. **Check Section 3** of COORDINATION.md for current project state before writing any code.
-3. **Check Section 14** of COORDINATION.md for the priority task queue.
+```
+You are Claude CLI operating on the LeadGenAI project.
+Before writing a single line of code, running a single command,
+or making a single decision, you MUST complete every item below.
+This is not optional. This is not a suggestion.
+```
 
-## Project in One Paragraph
+### Mandatory Pre-Work Checklist
 
-LeadGenAI is a Next.js 16 App Router app. Users describe their ideal B2B customer in chat → Claude Sonnet 4.6 agent uses Brave Search to find prospects → enriches each with AI-drafted cold emails + talking points → exports to Google Sheets or CSV. V0.5 MVP is feature-complete. Active work is on polishing the scaffolded pages (inbox, pipeline, analytics, sequences) and building deferred features (Inngest queue, Playwright scraper, SMTP verification).
+```
+[ ] 1. Open and read COORDINATION.md in full — top to bottom.
+[ ] 2. Read COORDINATION.md Section 0.1 — what are other agents currently doing?
+[ ] 3. Read COORDINATION.md Section 0.2 — are any files you need already claimed?
+[ ] 4. Read COORDINATION.md Section 3 — what is done? what is not done?
+[ ] 5. Read COORDINATION.md Section 14 — what is the current priority queue?
+[ ] 6. Update Section 0.1 in COORDINATION.md: set your row to ✅ Active with your task.
+[ ] 7. Add your files to Section 0.2 in COORDINATION.md (File Claims).
+[ ] 8. Begin work — record EVERY action in Section 13 before moving on.
+[ ] 9. When done: update Section 3 if anything shipped, clear Section 0.2, set 0.1 to 💤 Idle.
+```
 
-## Critical Rules for Claude CLI
+**If any item is unchecked: STOP. Do not write code. Complete the checklist.**
 
-- **Never expose `SUPABASE_SERVICE_ROLE_KEY` to browser-side code.**
-- **Always preserve mock fallbacks.** Every external provider must work without API keys.
-- **Use `getOrSetCache()`** from `lib/cache.ts` for all external API calls — primary cost lever.
-- **Server Components by default.** Add `"use client"` only for `useState`/`useChat`/browser APIs.
-- **Zod for all parsing.** No `any` types. Derive types via `z.infer<typeof schema>`.
-- **Update `COORDINATION.md` Section 13 (Action Log)** after every significant action.
-- **Update `plan.md`** alongside every commit.
+---
+
+## What This Project Is
+
+LeadGenAI — Next.js 16 App Router, TypeScript strict, Tailwind v4 + shadcn/ui, Supabase, Claude Sonnet 4.6 via Vercel AI SDK v6. Users describe B2B prospects in chat → AI finds them via Brave Search → enriches each with cold email + talking points → exports to Google Sheets or CSV.
+
+**v0.5 MVP is feature-complete.** Scaffolded pages (inbox, pipeline, analytics, sequences) need real implementation. Deferred: Inngest queue, Playwright scraper, SMTP verification, billing.
+
+**Full context: `COORDINATION.md` — read it now if you haven't.**
+
+---
+
+## Claude CLI's Role in This Project
+
+You own (primary responsibility):
+- `lib/agent/` — tools, handlers, system prompt
+- `app/api/` — all API routes including `/api/chat`
+- `lib/providers/` — all external provider wrappers
+- `lib/` — utilities, cache, credits, compliance
+- `supabase/migrations/` — DB schema changes
+- `COORDINATION.md` — keeping it accurate and up to date
+
+Do NOT touch without coordination:
+- `app/app/*` UI pages (Antigravity CLI owns these)
+- `tests/` (Codex owns these)
+- Any file another agent has claimed in Section 0.2
+
+---
+
+## Hard Rules (Non-Negotiable)
+
+1. **Never expose `SUPABASE_SERVICE_ROLE_KEY` to browser-side code.**
+2. **Always preserve mock fallbacks.** Every provider must work without API keys.
+3. **`getOrSetCache()`** from `lib/cache.ts` for ALL external API calls.
+4. **Server Components by default.** `"use client"` only for `useState`/`useChat`/browser APIs.
+5. **Zod for all parsing.** No `any` types. `z.infer<typeof schema>` for types.
+6. **`cn()` from `lib/utils.ts`** for conditional classes. No inline `style={}`.
+7. **`lib/agent/tools.ts` = schemas only.** Zero business logic there.
+8. **Record every action in COORDINATION.md Section 13** before moving on.
+9. **Check Section 0.2 before touching any file.** If claimed by another agent, stop.
+10. **Update plan.md alongside every commit.**
+
+---
 
 ## Key Files
 
 | File | Purpose |
 |---|---|
-| `COORDINATION.md` | Master context — read first, update after every action |
-| `app/api/chat/route.ts` | Core streaming AI agent endpoint |
-| `lib/agent/tools.ts` | 7 tool Zod schemas |
+| `COORDINATION.md` | MASTER — read first, update always |
+| `app/api/chat/route.ts` | Core streaming agent endpoint |
+| `lib/agent/tools.ts` | 7 tool Zod schemas + wrappers |
 | `lib/agent/tool-handlers.ts` | 7 tool implementations |
-| `lib/agent/system-prompt.ts` | Agent personality rules |
+| `lib/agent/system-prompt.ts` | Agent personality + anti-slop rules |
 | `supabase/migrations/0001_init.sql` | Full DB schema |
 | `plan.md` | Phase tracker |
 | `docs/PRD.md` | Product spec |
 | `docs/ARCHITECTURE.md` | Technical architecture |
 | `docs/SENDING_AGENT.md` | V2 email-send spec (deferred) |
-
-## What Was Built in Claude.ai (Cowork)
-
-Full history in `COORDINATION.md` Section 2. Summary:
-- **Foundation**: Next.js 16 scaffold, Supabase Auth + DB schema, Tailwind v4 + shadcn/ui
-- **Core agent**: `/api/chat` streaming route with 7 tools, all handlers, all providers
-- **Features**: Google Sheets export, CSV download, voice anchor, job history
-- **Scaffolded**: Inbox, Pipeline, Analytics, Sequences (need real implementation)
-- **Infra**: Credits system, email compliance, reply classifier, cron routes, mailbox management
 
 ## Running
 
