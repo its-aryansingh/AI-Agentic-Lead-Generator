@@ -15,6 +15,7 @@ import {
   handleAddNamedProspects,
   handleClarify,
   handleEnrichProspect,
+  handleLaunchCampaign,
   handlePublicSourceSearch,
   handleStartBulkJob,
   handleWebSearch,
@@ -104,6 +105,30 @@ export function makeTools(ctx: ToolContext) {
         draft_email: z.boolean().default(true),
       }),
       execute: async (params) => handleStartBulkJob(params, ctx),
+    }),
+
+    launch_campaign: tool({
+      description:
+        "Launch an outbound campaign: queue the drafted emails from a completed bulk job to send from the user's connected Gmail mailbox. Respects warm-up caps, send windows, and the suppression list. ONLY call after the user explicitly confirms they want to start sending real emails. Requires a connected mailbox (Settings → Mailboxes).",
+      inputSchema: z.object({
+        name: z.string().describe("A name for this campaign."),
+        job_id: z
+          .string()
+          .uuid()
+          .optional()
+          .describe("Source job. Defaults to the most recent completed job."),
+        mailbox_id: z
+          .string()
+          .uuid()
+          .optional()
+          .describe("Sending mailbox. Defaults to the user's active mailbox."),
+        sequence_id: z
+          .string()
+          .uuid()
+          .optional()
+          .describe("Optional sequence to associate (for future multi-step sends)."),
+      }),
+      execute: async (params) => handleLaunchCampaign(params, ctx),
     }),
   }
 }

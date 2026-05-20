@@ -43,18 +43,32 @@ export default async function InboxPage() {
   const supabase = await createClient()
 
   // RLS scopes reply_classifications to the user's own campaigns via the
-  // recipient → campaign chain.
+  // recipient → campaign chain. We fetch classifications, then resolve
+  // recipient emails in a second query — avoids embedded-select type
+  // inference issues (no generated Database types in this project).
   const { data: rows } = await supabase
     .from("reply_classifications")
-    .select(
-      "id,category,confidence,snippet,created_at,recipient_id,campaign_recipients(email,campaign_id)",
-    )
+    .select("id,category,confidence,snippet,created_at,recipient_id")
     .eq("needs_human", true)
     .eq("handled", false)
     .order("created_at", { ascending: false })
     .limit(50)
 
   const replies = rows ?? []
+
+  const recipientIds = Array.from(
+    new Set(replies.map((r) => r.recipient_id as string).filter(Boolean)),
+  )
+  const emailByRecipient = new Map<string, string>()
+  if (recipientIds.length > 0) {
+    const { data: recipientRows } = await supabase
+      .from("campaign_recipients")
+      .select("id,email")
+      .in("id", recipientIds)
+    for (const rr of recipientRows ?? []) {
+      emailByRecipient.set(rr.id as string, (rr.email as string) ?? "")
+    }
+  }
 
   return (
     <div className="flex-1 flex flex-col">
@@ -74,13 +88,7 @@ export default async function InboxPage() {
             </Card>
           )}
           {replies.map((r) => {
-            const recipient = r.campaign_recipients as
-              | { email?: string }
-              | { email?: string }[]
-              | null
-            const email = Array.isArray(recipient)
-              ? recipient[0]?.email
-              : recipient?.email
+            const email = emailByRecipient.get(r.recipient_id as string)
             return (
               <Card key={r.id as string} size="sm">
                 <CardHeader className="px-4">

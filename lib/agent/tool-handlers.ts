@@ -15,6 +15,7 @@ import { searchHnUsers } from "@/lib/providers/hn-algolia"
 import { getOrSetCache } from "@/lib/cache"
 import { bestGuessEmail, guessDomainFromCompany } from "@/lib/email-patterns"
 import { checkCredits, deductCredits } from "@/lib/credits"
+import { sha256Email } from "@/lib/email-compliance"
 
 import type { ToolContext } from "./tools"
 
@@ -459,4 +460,145 @@ async function mapConcurrent<T, R>(
   }
   await Promise.all(workers)
   return out
+}
+
+// ---------------------------------------------------------------------
+// launch_campaign — close the loop: turn enriched prospects into queued
+// sends from a connected mailbox.
+//
+// v1.1 scope: schedules each prospect's already-drafted first-touch
+// email immediately (the send-due cron handles throttling + warm-up +
+// suppression at send time). Multi-step cadence advancement comes in
+// v1.2; the sequence_id is recorded for that future expansion.
+// ---------------------------------------------------------------------
+
+export async function handleLaunchCampaign(
+  params: {
+    name: string
+    job_id?: string
+    mailbox_id?: string
+    sequence_id?: string
+  },
+  ctx: ToolContext,
+) {
+  const supabase = createAdminClient()
+
+  // 1. Resolve the sending mailbox (explicit, else the user's active one).
+  let mailboxId = params.mailbox_id
+  if (!mailboxId) {
+    const { data: mb } = await supabase
+      .from("mailboxes")
+      .select("id")
+      .eq("user_id", ctx.userId)
+      .eq("status", "active")
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle()
+    mailboxId = (mb?.id as string | undefined) ?? undefined
+  }
+  if (!mailboxId) {
+    return {
+      error:
+        "No connected mailbox. Connect a Gmail account at Settings → Mailboxes before launching a campaign.",
+    }
+  }
+
+  // 2. Resolve the source prospects (explicit job, else the latest job).
+  let jobId = params.job_id
+  if (!jobId) {
+    const { data: latest } = await supabase
+      .from("jobs")
+      .select("id")
+      .eq("user_id", ctx.userId)
+      .eq("status", "completed")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    jobId = (latest?.id as string | undefined) ?? undefined
+  }
+  if (!jobId) {
+    return { error: "No completed job to launch from. Run a bulk enrichment first." }
+  }
+
+  const { data: prospectRows } = await supabase
+    .from("prospects")
+    .select("id,email,email_subject,email_body")
+    .eq("job_id", jobId)
+
+  // Only prospects with both an email AND a drafted subject+body are sendable.
+  const sendable = (prospectRows ?? []).filter(
+    (p) => p.email && p.email_subject && p.email_body,
+  )
+  if (sendable.length === 0) {
+    return {
+      error:
+        "No sendable prospects on that job (each needs an email + a drafted subject and body).",
+    }
+  }
+
+  // 3. Filter out globally-suppressed addresses up front.
+  const { data: suppressed } = await supabase
+    .from("suppressions")
+    .select("email_hash")
+    .eq("user_id", ctx.userId)
+  const suppressedHashes = new Set(
+    (suppressed ?? []).map((s) => s.email_hash as string),
+  )
+
+  // 4. Create the campaign.
+  const { data: campaign, error: campErr } = await supabase
+    .from("campaigns")
+    .insert({
+      user_id: ctx.userId,
+      mailbox_id: mailboxId,
+      sequence_id: params.sequence_id ?? null,
+      source_job_id: jobId,
+      name: params.name,
+      status: "active",
+    })
+    .select("id")
+    .single()
+  if (campErr || !campaign) {
+    return { error: campErr?.message ?? "Failed to create campaign." }
+  }
+
+  // 5. Seed recipients — frozen copy of the drafted content, scheduled now.
+  const recipientInserts: Array<Record<string, unknown>> = []
+  let skipped = 0
+  for (const p of sendable) {
+    const emailHash = sha256Email(p.email as string)
+    if (suppressedHashes.has(emailHash)) {
+      skipped++
+      continue
+    }
+    recipientInserts.push({
+      campaign_id: campaign.id,
+      prospect_id: p.id,
+      email: p.email,
+      subject: p.email_subject,
+      body: p.email_body,
+      status: "scheduled",
+      scheduled_for: new Date().toISOString(),
+    })
+  }
+
+  if (recipientInserts.length === 0) {
+    await supabase
+      .from("campaigns")
+      .update({ status: "completed" })
+      .eq("id", campaign.id)
+    return {
+      error: "All sendable prospects are on your suppression list.",
+      campaign_id: campaign.id,
+    }
+  }
+
+  await supabase.from("campaign_recipients").insert(recipientInserts)
+
+  return {
+    campaign_id: campaign.id,
+    scheduled: recipientInserts.length,
+    suppressed_skipped: skipped,
+    note: "Recipients queued. The send worker dispatches them on the next cron tick, respecting your mailbox warm-up cap and send window.",
+  }
 }

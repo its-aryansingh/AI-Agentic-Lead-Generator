@@ -80,6 +80,14 @@ interface ClarifyResult {
   suggested_answers?: string[]
 }
 
+interface LaunchCampaignResult {
+  campaign_id?: string
+  scheduled?: number
+  suppressed_skipped?: number
+  note?: string
+  error?: string
+}
+
 interface InitialMessage {
   id: string
   role: "user" | "assistant"
@@ -401,6 +409,9 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCall }) {
   if (toolCall.toolName === "start_bulk_job") {
     return <BulkJobCard result={toolCall.result as BulkJobResult} />
   }
+  if (toolCall.toolName === "launch_campaign") {
+    return <LaunchCampaignCard result={toolCall.result as LaunchCampaignResult} />
+  }
   if (toolCall.toolName === "clarify_question") {
     return <ClarifyCard result={toolCall.result as ClarifyResult} />
   }
@@ -561,6 +572,50 @@ function BulkJobCard({ result }: { result: BulkJobResult }) {
             )}
           </div>
         )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function LaunchCampaignCard({ result }: { result: LaunchCampaignResult }) {
+  if (result.error) {
+    return (
+      <Card size="sm">
+        <CardContent className="py-3 text-sm text-destructive">
+          {result.error}
+        </CardContent>
+      </Card>
+    )
+  }
+  return (
+    <Card size="sm">
+      <CardHeader className="px-4">
+        <CardTitle>
+          Campaign launched — {result.scheduled ?? 0} email
+          {result.scheduled === 1 ? "" : "s"} queued
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2 text-sm">
+        {typeof result.suppressed_skipped === "number" &&
+          result.suppressed_skipped > 0 && (
+            <div className="text-xs text-muted-foreground">
+              {result.suppressed_skipped} skipped (on suppression list)
+            </div>
+          )}
+        {result.note && (
+          <div className="text-xs text-muted-foreground">{result.note}</div>
+        )}
+        <div className="flex flex-wrap gap-3">
+          <a
+            href="/app/pipeline"
+            className="text-xs underline underline-offset-2"
+          >
+            View pipeline →
+          </a>
+          <a href="/app/inbox" className="text-xs underline underline-offset-2">
+            Reply inbox →
+          </a>
+        </div>
       </CardContent>
     </Card>
   )
