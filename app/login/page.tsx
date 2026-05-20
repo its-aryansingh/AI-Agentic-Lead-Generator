@@ -4,9 +4,10 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 
 export default function LoginPage() {
-  const supabase = createClient()
-
+  // NB: client created lazily inside the handler so this page can be
+  // prerendered without NEXT_PUBLIC_SUPABASE_URL set (e.g. during CI builds).
   async function signInWithGoogle() {
+    const supabase = createClient()
     await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {

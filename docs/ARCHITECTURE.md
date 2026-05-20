@@ -1,14 +1,40 @@
 # System Architecture — Conversational AI Lead-Gen Agent
 
-**Version:** v0.4 (free scraping pipeline)
-**Status:** Pre-build, production target
+**Version:** v0.5 (shipped MVP — mid-scope cut of v0.4)
+**Status:** MVP built, ready for design-partner beta
 **Audience:** Solo founder (you), future engineering hires
 
 > **Change log:**
 > - v0.1 — Paste-LinkedIn-URL enrichment tool
 > - v0.2 — Chat-first redesign with Apollo discovery + CSV input
 > - v0.3 — Apollo swapped for Proxycurl
-> - **v0.4 (current)** — All paid data APIs removed. Discovery via free search APIs (Brave + DuckDuckGo). Enrichment via self-hosted Playwright scrapers on Fly.io. Email finding via on-page extraction + pattern guessing + free SMTP verification. Only recurring cost is Anthropic LLM + ~$5/mo Fly.io. Timeline: 12-13 weeks solo.
+> - v0.4 — All paid data APIs removed. Fly.io scraper service. 12-13 wk plan.
+> - **v0.5 (current, shipped)** — Mid-scope cut of v0.4 to compress build to days, not weeks. Kept: chat-first UX, Brave Search discovery, Anthropic Claude (Sonnet) drafting, Google Sheets export, CSV download, voice-anchor settings. **Deferred**: separate Fly.io scraper service, Inngest queues, SMTP email verification, billing (Razorpay/Stripe), CSV upload, public-source search (GitHub/ProductHunt/HN), Sending Agent v2. Every external dependency has a graceful mock fallback so the whole product demos without external accounts.
+
+---
+
+## 0. What v0.5 actually ships
+
+**Working surfaces**
+- `/(marketing)` — landing page
+- `/login` — Google OAuth (`spreadsheets` + `drive.file` scopes)
+- `/app/chat` — streaming chat, tool-call cards, prospect previews, CSV/Sheet handoff
+- `/app/jobs` — history of bulk enrichments with download links
+- `/app/settings/voice` — paste a sample email to anchor draft voice
+
+**Working backend**
+- `POST /api/chat` — Vercel AI SDK streaming with 5 tools registered (`web_search`, `enrich_prospect`, `clarify_question`, `start_bulk_job`, `public_source_search` stub)
+- `GET /api/export/csv?jobId=...` — RLS-protected CSV stream
+- `POST /api/export/sheets` — pushes a job's prospects to a new Google Sheet
+- `GET /api/auth/callback` — exchanges OAuth code, upserts public.users with the Google refresh token
+
+**Data model** — full schema in `supabase/migrations/0001_init.sql`. Includes RLS on every user-data table and a trigger that touches `chat_sessions.last_message_at` on insert.
+
+**Mock fallbacks** — every provider that talks to a paid service checks for its API key and substitutes deterministic mock data (15-person Indian SaaS cast, hash-seeded by the query) when missing. This is so a fresh clone runs end-to-end without setting up Supabase + Anthropic + Brave + Google accounts.
+
+**Cost profile in production** — ~$0.03 per enriched prospect with real keys; $0 with mocks. Free tier (25 prospects/mo) costs ~$0.75 per free user.
+
+---
 
 ---
 

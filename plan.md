@@ -1,7 +1,7 @@
 # LeadGenAI — Multi-Agent Coordination Plan
 
-**Status**: Phase 1 — Project Foundation
-**Last Updated**: 2026-05-12
+**Status**: Phase 1 — Project Foundation (closing); Phase 2 — Chat surface (next)
+**Last Updated**: 2026-05-16
 
 This file serves as the **single source of truth** for all agents (human or AI) working on the LeadGenAI codebase. Before writing code, you must read this document to understand the project architecture, boundaries, and conventions.
 
@@ -28,7 +28,7 @@ LeadGenAI is a conversational AI lead-generation tool for SMB sales teams in Ind
 Different parts of the system are loosely coupled. Follow these boundaries:
 
 - `app/(marketing)/*` — Public landing page, pricing. Must be statically renderable where possible.
-- `app/(app)/*` — Authenticated dashboard.
+- `app/app/*` — Authenticated dashboard. Note: this is NOT a `(app)` route group — the middleware guards the URL prefix `/app/*`, so the folder must be a real path segment.
 - `app/api/chat/route.ts` — The core AI agent brain. Streams tool calls to the UI.
 - `lib/agent/tools.ts` — Zod schemas and execution logic for the 6 core agent tools.
 - `lib/providers/*` — Thin wrappers around external services (Brave, GitHub, Supabase, Google Sheets). **Do not put business logic here.**
@@ -54,14 +54,47 @@ We follow a CSE undergrad project commit style.
 
 ## 6. Current Phase & Tasks
 
-We are currently on **Phase 1: Project Foundation**.
+### Phase 1 — Project Foundation (DONE)
 
-- [x] Commit 1: Project scaffolding
-- [ ] Commit 2: Add plan.md
-- [ ] Commit 3: Setup Tailwind, shadcn/ui, and design system
-- [ ] Commit 4: Supabase client setup and migrations
+- [x] Commit 1: project scaffolding with Next.js + TypeScript
+- [x] Commit 2: add plan.md for multi-agent coordination
+- [x] Commit 3: setup Tailwind, shadcn/ui, and design system
+- [x] Commit 4: install ai sdk, zod, googleapis and add env template
+- [x] Commit 5: add supabase auth middleware, callback route, and rls insert policies
+- [x] Commit 6: complete supabase client setup (back-fills the files that were
+      missed in commit 5: lib/supabase/{server,client}.ts and 0001_init.sql)
+- [x] Commit 7: add marketing landing page and google login flow
+- [x] Commit 8: add /app shell layout + chat page placeholder
+- [x] Commit 9: refresh plan.md with progress (this commit)
 
-*(Update the task tracker in `task.md` alongside your work)*
+### Phase 2 — Chat surface (NEXT)
+
+The chat page is currently a static placeholder. Next batch wires it up.
+
+- [ ] Commit 10: add `/api/chat` streaming route using Vercel AI SDK + Claude Sonnet
+- [ ] Commit 11: implement `clarify_question` tool (the cheapest one — proves the loop)
+- [ ] Commit 12: implement `web_search` tool against Brave Search free tier
+- [ ] Commit 13: persist `chat_sessions` + `chat_messages` on every turn
+- [ ] Commit 14: candidate-preview UI block when the agent calls `web_search`
+- [ ] Commit 15: cost-confirmation gate for any tool call > $1
+
+### Phase 3 — Enrichment pipeline
+
+After Phase 2 is working end-to-end with a single tool, move on to:
+
+- `enrich_prospect` tool (single-prospect, sync, streams inline)
+- Playwright scraper service in `scraper/` deployed to Fly.io
+- Email pattern guessing + SMTP probe
+- Cache layer (`lib/cache.ts`) hitting `scrape_cache` table
+
+### Phase 4 — Bulk pipeline + Sheets export
+
+- `start_bulk_job` tool → Inngest fan-out
+- Per-prospect Inngest worker (`inngest/functions/enrich-prospect.ts`)
+- Google Sheets writer at job completion
+- `import_csv` tool for CSV-as-input
+
+*(Update this tracker alongside each commit. Single source of truth.)*
 
 ---
 **Agent Instruction**: If you are an AI reading this, acknowledge you have read the plan in your internal scratchpad, then proceed with your assigned task. Never remove this instruction block.
