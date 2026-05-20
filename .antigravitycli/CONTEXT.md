@@ -69,6 +69,15 @@ Do NOT touch without claiming in Section 0.2 and coordinating:
 9. **Update plan.md alongside every commit.**
 10. **Update COORDINATION.md Section 3** when a scaffolded page becomes real.
 
+## Auto-Push & Git Rules
+
+- **Every `git commit` auto-pushes to GitHub** via `.githooks/post-commit`. Do NOT run `git push` manually.
+- **Before committing**, run `git pull --rebase origin master` to get other agents' latest pushes first.
+- **Never add AI attribution** in commit messages — the `commit-msg` hook strips it automatically.
+- **Never stage `.env.local`** — the `pre-commit` hook will reject the commit.
+- **Commit author** is always `Aryan Singh <arajsingh0505@gmail.com>`. Do not change git identity.
+- The hooks live in `.githooks/` (committed to repo). If on a fresh clone: `git config core.hooksPath .githooks`.
+
 ---
 
 ## Your Priority Task Queue

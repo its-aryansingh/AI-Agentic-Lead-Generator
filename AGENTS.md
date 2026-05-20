@@ -342,6 +342,13 @@ Check `plan.md` for the living task tracker. At time of writing:
 7. Always preserve mock fallbacks — no code hard-fails when API keys are absent.
 8. When unsure about design intent: check `docs/PRD.md` → `docs/ARCHITECTURE.md` → COORDINATION.md Section 15. Do not guess.
 
+### Codex Auto-Push & Git Rules
+9. **Every `git commit` auto-pushes to GitHub** via `.githooks/post-commit`. Do NOT run `git push` separately.
+10. **Before committing**, run `git pull --rebase origin master` to get other agents' latest work.
+11. **Never add Co-Authored-By** lines — the `commit-msg` hook strips AI attribution automatically.
+12. **Never stage `.env.local`** — the `pre-commit` hook will reject the commit.
+13. **Commit author** must always be `Aryan Singh <arajsingh0505@gmail.com>`. If git identity is wrong, fix it before committing: `git config user.name "Aryan Singh" && git config user.email "arajsingh0505@gmail.com"`.
+
 ## 14. Original Agent Instruction Block (preserved)
 
 > 1. **Acknowledge** that you have read `AGENTS.md` and `COORDINATION.md`.

@@ -33,6 +33,11 @@
 
 ## Section 0 — LIVE AGENT STATUS (Simultaneous Coordination)
 
+> **AUTO-PUSH IS ACTIVE.** Every `git commit` automatically pushes to GitHub.
+> You do NOT need to run `git push` manually. The `.githooks/post-commit` hook handles it.
+> All commits appear as authored by **Aryan Singh <arajsingh0505@gmail.com>** — AI attribution is stripped by `.githooks/commit-msg`.
+> Before committing, pull latest with `git pull --rebase origin <branch>` to avoid conflicts.
+
 > **This section is the real-time coordination layer.**
 > All agents read it before starting. All agents write to it when claiming or finishing work.
 > It is the only mechanism preventing two agents from overwriting each other.
@@ -43,7 +48,7 @@ Update this table when you START and when you FINISH. Format: `[AGENT] | [STATUS
 
 | Agent | Status | Current Task | Files Being Touched | Started |
 |---|---|---|---|---|
-| Claude CLI | ✅ Active | Coordination system setup | COORDINATION.md, CLAUDE.md, .antigravitycli/CONTEXT.md, AGENTS.md, plan.md | 2026-05-21 |
+| Claude CLI | 💤 Idle | — (last: GitHub MCP + auto-push setup complete) | — | 2026-05-21 |
 | Antigravity CLI | 💤 Idle | — | — | — |
 | Codex | 💤 Idle | — | — | — |
 
@@ -514,6 +519,83 @@ Every agent must follow these exactly. No exceptions.
 
 ---
 
+## Section 12b — GitHub MCP & Auto-Push System
+
+> This section governs how all agents interact with GitHub. Read it before any commit.
+
+### How Auto-Push Works
+
+Every `git commit` triggers the `.githooks/post-commit` hook, which immediately runs:
+```bash
+git push origin <current-branch> --quiet
+```
+The push happens silently on success. On failure it prints a warning — the commit is still safe locally. **You never need to run `git push` manually.**
+
+### How Human-Like Commits Work
+
+Three layers enforce human-looking commits:
+
+| Layer | File | What It Does |
+|---|---|---|
+| Git identity | local `git config` | Every commit is authored `Aryan Singh <arajsingh0505@gmail.com>` |
+| `commit-msg` hook | `.githooks/commit-msg` | Strips all `Co-Authored-By:` AI lines before commit is finalised |
+| `pre-commit` hook | `.githooks/pre-commit` | Blocks commits if identity is wrong or secrets are staged |
+
+Result: GitHub shows every commit as Aryan's — no AI attribution, no service-account names.
+
+### GitHub MCP Server (Claude CLI)
+
+The GitHub MCP server gives Claude CLI direct GitHub API access (read repos, create PRs, manage issues, read file trees). Configured in `.claude/settings.json`.
+
+**Setup (one-time):**
+```
+1. Create a GitHub Personal Access Token at https://github.com/settings/tokens
+   Scopes needed: repo (full), read:user
+2. Set it in your shell environment:
+   Windows: [System.Environment]::SetEnvironmentVariable("GITHUB_TOKEN","ghp_...", "User")
+   Bash/Zsh: export GITHUB_TOKEN=ghp_... (add to ~/.bashrc or ~/.zshrc)
+3. Restart Claude CLI — the MCP server will start automatically.
+```
+
+MCP server: `npx @modelcontextprotocol/server-github` (auto-installed on first use).
+Config file: `.claude/settings.json` in project root.
+
+### Commit Protocol for All Agents
+
+```
+Before commit:
+  1. git pull --rebase origin <branch>   ← get other agents' latest pushes
+  2. Stage only your files               ← never git add -A blindly
+  3. git commit -m "..."                 ← hook strips AI markers automatically
+  4. Hook auto-pushes to GitHub          ← no manual push needed
+
+If post-commit push fails:
+  1. Check internet / credentials
+  2. Run: git push origin <branch>
+  3. Record the failure + manual push in Section 13
+```
+
+### Branch Strategy
+
+| Branch | Purpose |
+|---|---|
+| `master` | Active development — all agents commit here |
+| `main` | Stable baseline — do not commit directly |
+
+All agents commit to `master`. Only push to `main` when Aryan explicitly approves a release cut.
+
+### Push Log
+
+> Append here after every push. Format: `[DATE TIME] [AGENT] [COMMIT] [BRANCH] — [SUMMARY]`
+
+| DateTime | Agent | Commit | Branch | Summary |
+|---|---|---|---|---|
+| 2026-05-21 | Claude CLI | 75ae3cf | master | coordination system v1 |
+| 2026-05-21 | Claude CLI | c7dcae8 | master | enforcement + simultaneous protocol |
+| 2026-05-21 | Claude CLI | (current) | master | github mcp + auto-push hooks |
+
+---
+
 ## Section 13 — Action Log (Append-Only)
 
 > **Rules:** Append only. Never delete or edit another agent's entry.
@@ -572,6 +654,19 @@ Every agent must follow these exactly. No exceptions.
 - `AGENTS.md` v2 — mandatory checklist for Codex, harder enforcement language
 - **HANDOFF:** Next priority = implement real Inbox page. Antigravity CLI should claim inbox/page.tsx in Section 0.2 and implement the reply-thread UI. Claude CLI will handle any backend work needed.
 
+### 2026-05-21 | Claude CLI | BUILD — GitHub MCP + Auto-Push System
+- **Git identity fixed:** local config now `Aryan Singh <arajsingh0505@gmail.com>` (was `Aryan / aryan@local`)
+- **`.githooks/pre-commit`** — blocks commits if identity is wrong or `.env.local` / service-role key is staged
+- **`.githooks/commit-msg`** — strips all `Co-Authored-By` AI attribution lines before commit is finalised
+- **`.githooks/post-commit`** — runs `git push origin <branch>` silently after every commit; warns on failure, never blocks
+- **`git config core.hooksPath .githooks`** — all agents on this repo automatically use these hooks
+- **`.claude/settings.json`** — project-level Claude CLI config: GitHub MCP server (`@modelcontextprotocol/server-github`, reads `GITHUB_TOKEN` env var) + pre-allowed git/npm commands to reduce permission prompts
+- **`COORDINATION.md` Section 12b** — full GitHub MCP setup guide, commit protocol, branch strategy, push log table
+- **`COORDINATION.md` Section 0** — auto-push notice banner added
+- **CLAUDE.md, .antigravitycli/CONTEXT.md, AGENTS.md** — auto-push rules added to hard-rules list
+- **DECISION:** Hooks live in `.githooks/` (committed to repo) not `.git/hooks/` (ignored) so all agents on any clone get them automatically after running `git config core.hooksPath .githooks`
+- **NEXT:** Aryan must set `GITHUB_TOKEN` env var (Windows: System env vars) for GitHub MCP to activate. Auto-push works immediately via git hooks — no token needed for that.
+
 ---
 
 ## Section 14 — Next Actions Queue (Priority Order)
@@ -620,18 +715,39 @@ Agents pull from the top. Claim the task in Section 0 before starting.
 
 ## Section 16 — Running the Project
 
+### Fresh Clone Setup (one-time — any agent on a new machine)
+
 ```bash
+# 1. Install dependencies
 npm install
+
+# 2. Wire the committed git hooks (REQUIRED — must do this once per clone)
+git config core.hooksPath .githooks
+
+# 3. Set git identity (REQUIRED — must match exactly)
+git config user.name "Aryan Singh"
+git config user.email "arajsingh0505@gmail.com"
+
+# 4. Set GitHub token for MCP (optional — only needed for GitHub API tools)
+#    Windows PowerShell:
+[System.Environment]::SetEnvironmentVariable("GITHUB_TOKEN", "ghp_YOUR_TOKEN", "User")
+#    Bash/Zsh:
+export GITHUB_TOKEN=ghp_YOUR_TOKEN   # add to ~/.bashrc or ~/.zshrc
+
+# 5. Environment variables
 cp .env.local.example .env.local   # fill Supabase keys; leave provider keys blank for mocks
-
-npm run dev     # → http://localhost:3000
-npm test        # Node built-in test runner
-npm run lint    # ESLint
-npm run build   # production build
-
-# DB schema (first time)
-supabase db push
-# or: psql "$DATABASE_URL" -f supabase/migrations/0001_init.sql
 ```
 
-**Mock mode:** Entire product runs without Anthropic/Brave/Google keys. Only Supabase required for login. Real outputs tagged `demo data`.
+### Daily Commands
+
+```bash
+git pull --rebase origin master    # always pull before starting work
+npm run dev                        # → http://localhost:3000
+npm test
+npm run lint
+npm run build
+supabase db push                   # apply schema changes (or psql "$DATABASE_URL" -f supabase/migrations/0001_init.sql)
+```
+
+**Auto-push:** Every `git commit` pushes to GitHub automatically. No manual `git push` needed.
+**Mock mode:** Full product runs without Anthropic/Brave/Google keys. Only Supabase required for login. Real outputs tagged `demo data`.

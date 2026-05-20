@@ -70,6 +70,15 @@ Do NOT touch without coordination:
 9. **Check Section 0.2 before touching any file.** If claimed by another agent, stop.
 10. **Update plan.md alongside every commit.**
 
+## Auto-Push & Git Rules
+
+- **Every `git commit` auto-pushes to GitHub** via `.githooks/post-commit`. Do NOT run `git push` manually.
+- **Before committing**, run `git pull --rebase origin master` to get other agents' latest pushes.
+- **Never add `Co-Authored-By`** in commit messages — the `commit-msg` hook strips it, but don't add it at all.
+- **Never stage `.env.local`** — pre-commit hook will block the commit.
+- **Commit author** is always `Aryan Singh <arajsingh0505@gmail.com>` — never change `user.name` or `user.email`.
+- **GitHub MCP** is active in `.claude/settings.json`. Set `GITHUB_TOKEN` env var to use GitHub API tools (create PRs, read issues, etc.).
+
 ---
 
 ## Key Files

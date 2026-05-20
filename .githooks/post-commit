@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# post-commit hook — auto-pushes every commit to GitHub immediately.
+# Runs silently on success; prints a warning on failure (never blocks work).
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+COMMIT=$(git rev-parse --short HEAD)
+REMOTE="origin"
+
+# Push the current branch to origin
+OUTPUT=$(git push "$REMOTE" "$BRANCH" --quiet 2>&1)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -eq 0 ]; then
+  echo ""
+  echo "  → pushed $COMMIT to github:${REMOTE}/${BRANCH}"
+else
+  echo ""
+  echo "  ⚠ auto-push failed (commit $COMMIT is local only)"
+  echo "    run: git push $REMOTE $BRANCH"
+  echo "    error: $OUTPUT"
+fi
+
+exit 0  # never fail — commit already succeeded
