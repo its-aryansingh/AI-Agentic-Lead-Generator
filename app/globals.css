@@ -128,3 +128,82 @@
     @apply font-sans;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* v0.6 — Premium UI Utilities                                        */
+/* ------------------------------------------------------------------ */
+
+/* Chart palette — vibrant HSL tuned for both light & dark */
+:root {
+  --chart-teal: oklch(0.65 0.15 180);
+  --chart-violet: oklch(0.55 0.2 290);
+  --chart-amber: oklch(0.75 0.15 75);
+  --chart-rose: oklch(0.6 0.2 15);
+  --chart-sky: oklch(0.7 0.12 230);
+  --chart-emerald: oklch(0.7 0.17 155);
+}
+.dark {
+  --chart-teal: oklch(0.7 0.14 180);
+  --chart-violet: oklch(0.65 0.18 290);
+  --chart-amber: oklch(0.8 0.14 75);
+  --chart-rose: oklch(0.7 0.18 15);
+  --chart-sky: oklch(0.75 0.11 230);
+  --chart-emerald: oklch(0.75 0.15 155);
+}
+
+/* Keyframe animations */
+@keyframes slide-in-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes bar-grow {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+
+.animate-slide-in-up {
+  animation: slide-in-up 0.4s ease-out both;
+}
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out both;
+}
+.animate-bar-grow {
+  animation: bar-grow 0.8s ease-out both;
+  transform-origin: left;
+}
+.animate-pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* Glassmorphism card */
+.glass-card {
+  background: oklch(1 0 0 / 4%);
+  backdrop-filter: blur(12px);
+  border: 1px solid oklch(1 0 0 / 8%);
+}
+.dark .glass-card {
+  background: oklch(1 0 0 / 5%);
+  border-color: oklch(1 0 0 / 10%);
+}
+
+/* Kanban drag-over highlight */
+.kanban-drop-active {
+  outline: 2px dashed var(--chart-teal);
+  outline-offset: -2px;
+  background: oklch(0.65 0.15 180 / 6%);
+}
+.dark .kanban-drop-active {
+  background: oklch(0.7 0.14 180 / 8%);
+}

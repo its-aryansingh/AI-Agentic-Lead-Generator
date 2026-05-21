@@ -165,3 +165,6 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ sent: totalSent })
 }
+
+// Vercel Cron always sends GET; POST is for manual/curl triggers.
+export { POST as GET }

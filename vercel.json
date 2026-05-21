@@ -1,0 +1,16 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/send-due",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/detect-replies",
+      "schedule": "*/20 * * * *"
+    },
+    {
+      "path": "/api/cron/poll-intent",
+      "schedule": "0 * * * *"
+    }
+  ]
+}

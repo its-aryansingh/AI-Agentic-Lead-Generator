@@ -16,7 +16,7 @@ export async function GET() {
   return NextResponse.json({
     ok: true,
     service: "leadgenai",
-    version: "0.5.0",
+    version: "0.6.0",
     timestamp: new Date().toISOString(),
     providers: {
       anthropic: Boolean(process.env.ANTHROPIC_API_KEY),

@@ -1,10 +1,6 @@
 import { createClient } from "@/lib/supabase/server"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { AnalyticsClient, type AnalyticsData } from "./analytics-client"
 
-// Hoisted outside the component so the react-hooks/purity lint rule
-// (which flags Date.now() during render even in RSC contexts) doesn't
-// fire. Server components are re-evaluated per request, so this is
-// safe to call here too.
 function getMonthAgoIso(): string {
   return new Date(Date.now() - 30 * 86_400_000).toISOString()
 }
@@ -12,14 +8,7 @@ function getMonthAgoIso(): string {
 /**
  * /app/analytics — read-only metrics dashboard.
  *
- * Aggregates over the user's existing rows. v1.0 surfaces:
- *   - Lifetime totals (jobs, prospects, sequences)
- *   - This month's activity (jobs, prospects, credits used)
- *   - Top discovery sources
- *   - Voice-anchor adoption (single yes/no — but visible alongside the
- *     numbers is the right frame for nudging it)
- *
- * v1.1 adds reply rate, sequence step performance, segment funnels.
+ * Aggregates over the user's existing rows.
  */
 export default async function AnalyticsPage() {
   const supabase = await createClient()
@@ -102,121 +91,41 @@ export default async function AnalyticsPage() {
     creditsRemaining = (u?.credits_remaining as number) ?? 0
   }
 
+  const avgProspectsPerJob = monthlyJobs && monthlyJobs > 0 
+    ? Math.round((monthlyProspects ?? 0) / monthlyJobs)
+    : 0
+
+  const analyticsData: AnalyticsData = {
+    monthlyJobs: monthlyJobs ?? 0,
+    totalJobs: totalJobs ?? 0,
+    monthlyProspects: monthlyProspects ?? 0,
+    totalProspects: totalProspects ?? 0,
+    creditsUsedThisMonth,
+    creditsRemaining,
+    enrolledCount: enrolledCount ?? 0,
+    sequenceCount: sequenceCount ?? 0,
+    topSources,
+    hasVoiceAnchor,
+    avgProspectsPerJob
+  }
+
   return (
-    <div className="flex-1 flex flex-col">
-      <header className="px-6 py-4 border-b border-border">
-        <h1 className="text-base font-semibold">Analytics</h1>
+    <div className="flex-1 flex flex-col h-full bg-background/50 relative overflow-hidden">
+      {/* Decorative gradient blob */}
+      <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-gradient-to-b from-[var(--chart-violet)]/10 via-[var(--chart-emerald)]/5 to-transparent blur-3xl -z-10 pointer-events-none opacity-40" />
+      
+      <header className="px-6 py-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight">Analytics</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Metrics and performance across your campaigns and sequences.
+          </p>
+        </div>
       </header>
 
-      <section className="flex-1 overflow-y-auto px-6 py-6">
-        <div className="max-w-4xl mx-auto flex flex-col gap-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Metric label="Jobs this month" value={String(monthlyJobs ?? 0)} sub={`${totalJobs ?? 0} all-time`} />
-            <Metric
-              label="Prospects this month"
-              value={String(monthlyProspects ?? 0)}
-              sub={`${totalProspects ?? 0} all-time`}
-            />
-            <Metric
-              label="Credits used"
-              value={String(creditsUsedThisMonth)}
-              sub={`${creditsRemaining} remaining`}
-            />
-            <Metric
-              label="Active enrollments"
-              value={String(enrolledCount ?? 0)}
-              sub={`${sequenceCount ?? 0} sequence${(sequenceCount ?? 0) === 1 ? "" : "s"}`}
-            />
-          </div>
-
-          <Card size="sm">
-            <CardHeader className="px-4">
-              <CardTitle>Discovery sources — last 30 days</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {topSources.length === 0 ? (
-                <div className="text-sm text-muted-foreground">
-                  No candidates surfaced yet. Run a search or upload a CSV to
-                  populate this.
-                </div>
-              ) : (
-                <ul className="flex flex-col gap-2">
-                  {topSources.map(([source, count]) => {
-                    const total = topSources.reduce((s, [, c]) => s + c, 0)
-                    const pct = total === 0 ? 0 : Math.round((count / total) * 100)
-                    return (
-                      <li key={source} className="flex flex-col gap-1">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-mono">{source}</span>
-                          <span className="text-muted-foreground">
-                            {count} · {pct}%
-                          </span>
-                        </div>
-                        <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                          <div
-                            className="h-full bg-primary"
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card size="sm">
-            <CardHeader className="px-4">
-              <CardTitle>Quality signals</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Voice anchor set</span>
-                <span className="font-medium">{hasVoiceAnchor ? "yes" : "no"}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">
-                  Avg prospects / job (last 30d)
-                </span>
-                <span className="font-medium">
-                  {monthlyJobs && monthlyJobs > 0
-                    ? Math.round((monthlyProspects ?? 0) / monthlyJobs)
-                    : 0}
-                </span>
-              </div>
-              <div className="text-[11px] text-muted-foreground italic mt-2">
-                Reply-rate, open-rate, and per-sequence-step funnels land in
-                v1.1 with the Gmail send integration.
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+      <section className="flex-1 overflow-y-auto px-6">
+        <AnalyticsClient data={analyticsData} />
       </section>
     </div>
-  )
-}
-
-function Metric({
-  label,
-  value,
-  sub,
-}: {
-  label: string
-  value: string
-  sub?: string
-}) {
-  return (
-    <Card size="sm">
-      <CardContent className="py-4 flex flex-col">
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-          {label}
-        </div>
-        <div className="text-2xl font-semibold tracking-tight">{value}</div>
-        {sub && (
-          <div className="text-xs text-muted-foreground mt-0.5">{sub}</div>
-        )}
-      </CardContent>
-    </Card>
   )
 }

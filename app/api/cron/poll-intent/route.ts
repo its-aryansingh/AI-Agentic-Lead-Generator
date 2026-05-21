@@ -114,3 +114,5 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ watches: watches.length, triggers_written: written })
 }
+
+export { POST as GET }
