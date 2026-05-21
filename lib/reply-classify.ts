@@ -90,11 +90,11 @@ function mockClassify(body: string): ReplyClassification {
   if (/not interested|no thanks|we're good|pass\b|not a fit/.test(t)) {
     return { category: "not_interested", confidence: 0.8, reasoning: "Clear decline (mock)." }
   }
-  if (/how much|pricing|price|cost|how does it work|tell me more|what is|can you/.test(t)) {
-    return { category: "question", confidence: 0.75, reasoning: "Asking for info (mock)." }
-  }
   if (/interested|let's talk|book|call|demo|sounds good|keen|happy to chat/.test(t)) {
     return { category: "interested", confidence: 0.8, reasoning: "Positive engagement signal (mock)." }
+  }
+  if (/how much|pricing|price|cost|how does it work|tell me more|what is|can you/.test(t)) {
+    return { category: "question", confidence: 0.75, reasoning: "Asking for info (mock)." }
   }
   if (/already use|bad timing|not the right|wrong person|busy right now/.test(t)) {
     return { category: "objection", confidence: 0.7, reasoning: "Engaged pushback (mock)." }
