@@ -1,5 +1,5 @@
 import { headers } from "next/headers"
-import { stripe, STRIPE_WEBHOOK_SECRET, upgradeUserPlan, PlanType } from "@/lib/billing"
+import { getStripe, STRIPE_WEBHOOK_SECRET, upgradeUserPlan, PlanType } from "@/lib/billing"
 
 export async function POST(req: Request) {
   const body = await req.text()
@@ -11,7 +11,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const event = stripe.webhooks.constructEvent(
+    const event = getStripe().webhooks.constructEvent(
       body,
       signature,
       STRIPE_WEBHOOK_SECRET
@@ -22,7 +22,7 @@ export async function POST(req: Request) {
       const { plan, userId } = session.metadata || {}
       
       if (plan && userId) {
-        await upgradeUserPlan(userId, plan as PlanType, event.id)
+        await upgradeUserPlan(userId, plan as PlanType, event.id, "stripe")
       }
     }
 

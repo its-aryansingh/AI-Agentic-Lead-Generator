@@ -121,6 +121,9 @@ export function AppShell({
           <SidebarLink href="/app/settings/providers" pathname={pathname} onNavigate={close}>
             Providers
           </SidebarLink>
+          <SidebarLink href="/app/settings/billing" pathname={pathname} onNavigate={close}>
+            Billing & Plans
+          </SidebarLink>
         </nav>
 
         <div className="flex-1 px-3 py-3 overflow-y-auto flex flex-col gap-0.5">

@@ -1,6 +1,6 @@
 import { headers } from "next/headers"
 import crypto from "crypto"
-import { RAZORPAY_WEBHOOK_SECRET, upgradeUserPlan, PlanType } from "@/lib/billing"
+import { upgradeUserPlan, RAZORPAY_WEBHOOK_SECRET, PlanType } from "@/lib/billing"
 
 export async function POST(req: Request) {
   const body = await req.text()
@@ -31,7 +31,7 @@ export async function POST(req: Request) {
       if (plan && userId) {
         // razorpay event ids look like 'evnt_xyz'
         const idempotencyKey = event.id || payment.id
-        await upgradeUserPlan(userId, plan as PlanType, idempotencyKey)
+        await upgradeUserPlan(userId, plan as PlanType, idempotencyKey, "razorpay")
       }
     }
 
