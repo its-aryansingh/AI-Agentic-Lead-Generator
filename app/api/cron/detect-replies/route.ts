@@ -81,6 +81,7 @@ export async function POST(req: Request) {
         )
         await supabase.from("email_events").insert({
           recipient_id: recipient.id,
+          user_id: mb.user_id as string,
           event_type: "bounced",
         })
         processed++
@@ -91,6 +92,7 @@ export async function POST(req: Request) {
         // Don't stop the cascade for an OOO — just log it.
         await supabase.from("email_events").insert({
           recipient_id: recipient.id,
+          user_id: mb.user_id as string,
           event_type: "auto_reply",
           payload: { snippet: msg.snippet },
         })
@@ -104,6 +106,7 @@ export async function POST(req: Request) {
         .eq("id", recipient.id)
       await supabase.from("email_events").insert({
         recipient_id: recipient.id,
+        user_id: mb.user_id as string,
         event_type: "replied",
         payload: { snippet: msg.snippet },
       })
@@ -124,6 +127,7 @@ export async function POST(req: Request) {
 
       await supabase.from("reply_classifications").insert({
         recipient_id: recipient.id,
+        user_id: mb.user_id as string,
         category: classification.category,
         confidence: classification.confidence,
         snippet: msg.snippet.slice(0, 500),

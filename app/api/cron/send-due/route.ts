@@ -134,6 +134,7 @@ export async function POST(req: Request) {
           .eq("id", r.id)
         await supabase.from("email_events").insert({
           recipient_id: r.id,
+          user_id: c.user_id as string,
           event_type: "sent",
           payload: { mock: sent.mock },
         })
@@ -149,6 +150,7 @@ export async function POST(req: Request) {
           .eq("id", r.id)
         await supabase.from("email_events").insert({
           recipient_id: r.id,
+          user_id: c.user_id as string,
           event_type: "failed",
         })
       }

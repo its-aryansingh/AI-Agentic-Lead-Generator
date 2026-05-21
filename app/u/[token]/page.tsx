@@ -51,6 +51,7 @@ export default async function UnsubscribePage({
 
       await admin.from("email_events").insert({
         recipient_id: recipient.id,
+        user_id: parsed.userId,
         event_type: "unsubscribed",
       })
       ok = true
