@@ -38,6 +38,12 @@ export function BillingClient({
           name: "LeadGenAI",
           description: `Upgrade to ${PLANS[plan].name}`,
           order_id: order.orderId,
+          // Razorpay does NOT copy order notes to the payment entity; the
+          // payment.captured webhook reads payment.notes, so attach them here.
+          notes: {
+            plan: order.plan,
+            userId: order.userId,
+          },
           handler: function () {
             // The webhook is the source of truth for the upgrade; redirect optimistically.
             window.location.href = "/app/settings/billing?success=true"

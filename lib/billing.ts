@@ -50,6 +50,12 @@ export async function upgradeUserPlan(
   idempotencyKey: string,
   provider: "stripe" | "razorpay"
 ) {
+  // Validate before recording anything — webhook payloads are untrusted.
+  const planInfo = PLANS[plan]
+  if (plan === "free" || !planInfo) {
+    throw new Error(`Invalid plan for upgrade: ${plan}`)
+  }
+
   // 1. Check idempotency
   const adminClient = createAdminClient()
   const { data: existingEvent } = await adminClient
@@ -71,7 +77,6 @@ export async function upgradeUserPlan(
   })
 
   // 3. Update user
-  const planInfo = PLANS[plan]
   const { error } = await adminClient
     .from("users")
     .update({
