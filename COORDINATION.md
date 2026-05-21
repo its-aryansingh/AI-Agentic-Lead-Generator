@@ -43,7 +43,7 @@ Update this table when you START and when you FINISH. Format: `[AGENT] | [STATUS
 
 | Agent | Status | Current Task | Files Being Touched | Started |
 |---|---|---|---|---|
-| Claude CLI | ✅ Active | Committing: Inngest queue, DNS MX verification, middleware.ts fix, TS type fix | middleware.ts, lib/email-patterns.ts, lib/agent/tool-handlers.ts, inngest/*, app/api/inngest/ | 2026-05-21 |
+| Claude CLI | 💤 Idle | — | — | 2026-05-21 |
 | Antigravity CLI | 💤 Idle | — | — | 2026-05-21 |
 | Codex | 💤 Idle | — | — | 2026-05-21 |
 
@@ -56,12 +56,7 @@ Before editing any file, add it here. Remove it when your commit is done.
 
 | File | Claimed By | Reason | Claimed At |
 |---|---|---|---|
-| `lib/email-patterns.ts` | Claude CLI | DNS MX verification commit | 2026-05-21 |
-| `lib/agent/tool-handlers.ts` | Claude CLI | Inngest dispatch + TS type fix | 2026-05-21 |
-| `inngest/client.ts` | Claude CLI | New Inngest client | 2026-05-21 |
-| `inngest/functions/bulk-enrich.ts` | Claude CLI | New Inngest function | 2026-05-21 |
-| `app/api/inngest/route.ts` | Claude CLI | New Inngest handler route | 2026-05-21 |
-| `.env.example` | Claude CLI | Document new env vars | 2026-05-21 |
+| *(none currently locked)* | — | — | — |
 
 ### 0.3 — Simultaneous Work Protocol
 
@@ -654,6 +649,13 @@ Every agent must follow these exactly. No exceptions.
 - **TS type fix**: removed dead `"none"` from `dbConfidence` union in `handleStartBulkJob`; comparison was always-false and caused build failure.
 - **middleware.ts / proxy.ts resolution**: `proxy.ts` (committed) had wrong export name `export function proxy` — never valid Next.js middleware. `middleware.ts` existed on disk (untracked) with correct export. Rewrote `middleware.ts` with better Supabase cookie handling (mutate single response object) and added /login → /app/chat redirect for already-signed-in users. Staged proxy.ts deletion, tracked middleware.ts.
 - **DECISION**: proxy.ts was never functional middleware (wrong function name). middleware.ts is the single source of truth for auth. Both Supabase cookie patterns are correct; used the single-response-mutation pattern to avoid dropped cookies.
+
+### 2026-05-21 | Claude CLI | COMMIT — a1958d4
+- Read full COORDINATION.md; confirmed all agents idle and no file claims active.
+- Verified all staged files (inngest/client.ts, inngest/functions/bulk-enrich.ts, app/api/inngest/route.ts, lib/email-patterns.ts, lib/agent/tool-handlers.ts, .env.example, package.json) matched documented work.
+- Committed and auto-pushed `a1958d4`: feat: inngest async queue, dns mx verification, ts type fix, middleware.
+- Cleared file claims (Section 0.2) and set status to 💤 Idle.
+- **Next for Claude CLI**: Playwright scraper microservice (`scraper/` Fastify + Fly.io) — last remaining v0.7 item.
 
 ---
 
