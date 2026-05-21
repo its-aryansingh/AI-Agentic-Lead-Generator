@@ -40,11 +40,22 @@ next-env.d.ts
 
 # IDE
 .idea/
-# .vscode/ — shared project config IS committed (settings, tasks, mcp, watch script)
 .vscode/*.code-workspace
 .vscode/launch.json
+.vscode/tasks.json
+.vscode/watch-commit.ps1
 *.swp
 *.swo
+
+# Local development coordination — never publish
+COORDINATION.md
+CLAUDE.md
+GEMINI.md
+AGENTS.md
+plan.md
+.githooks/
+.claude/
+.antigravitycli/
 
 # scraper
 scraper/node_modules/
