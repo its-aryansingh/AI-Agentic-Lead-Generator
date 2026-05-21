@@ -10,21 +10,7 @@ import { InboxClient, type Reply } from "./inbox-client"
  * handled = false: interested / question / objection. 
  */
 
-export async function markHandled(formData: FormData) {
-  "use server"
-  const id = String(formData.get("id") ?? "")
-  if (!id) return
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect("/login")
-  await supabase
-    .from("reply_classifications")
-    .update({ handled: true })
-    .eq("id", id)
-  redirect("/app/inbox")
-}
+
 
 export default async function InboxPage() {
   const supabase = await createClient()

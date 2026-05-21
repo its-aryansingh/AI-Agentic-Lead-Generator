@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { EmptyState } from "@/components/ui/empty-state"
 import { Mail, Check, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { markHandled } from "./page"
+import { markHandled } from "../actions"
 import { useFormStatus } from "react-dom"
 
 export interface Reply {

@@ -30,3 +30,16 @@ export async function updateRecipientStatus(id: string, newStatus: string) {
   if (error) return { error: error.message }
   return { success: true }
 }
+
+export async function markHandled(formData: FormData) {
+  const id = String(formData.get("id") ?? "")
+  if (!id) return
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+  await supabase
+    .from("reply_classifications")
+    .update({ handled: true })
+    .eq("id", id)
+  return { success: true }
+}
