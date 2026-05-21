@@ -4,7 +4,7 @@ import Link from "next/link"
 import { createClient } from "@/lib/supabase/server"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { ArrowLeft, Mail, Linkedin, Phone, Play, Pause, ChevronRight } from "lucide-react"
+import { ArrowLeft, Mail, LinkIcon, Phone, Play, Pause, ChevronRight } from "lucide-react"
 
 /**
  * /app/sequences/[id] — view sequence config and enrollment stats.
@@ -115,7 +115,7 @@ export default async function SequenceDetailPage(props: {
               <div className="flex flex-col gap-6 relative z-10">
                 {steps.map((step, i) => {
                   const channel = step.channel as string
-                  const Icon = channel === "linkedin_dm" ? Linkedin : channel === "task" ? Phone : Mail
+                  const Icon = channel === "linkedin_dm" ? LinkIcon : channel === "task" ? Phone : Mail
                   const color = channel === "linkedin_dm" ? "var(--chart-sky)" : channel === "task" ? "var(--chart-amber)" : "var(--chart-violet)"
                   
                   return (
