@@ -1,0 +1,52 @@
+{
+  // ── File saving ──────────────────────────────────────────────────────────
+  "files.autoSave": "afterDelay",
+  "files.autoSaveDelay": 1000,
+  "editor.formatOnSave": true,
+
+  // ── Git ──────────────────────────────────────────────────────────────────
+  // VS Code git panel should NOT auto-push (our post-commit hook handles it)
+  "git.autofetch": true,
+  "git.autofetchPeriod": 30,
+  "git.confirmSync": false,
+  "git.enableSmartCommit": false,
+  "git.postCommitCommand": "none",
+  "git.branchProtection": ["main"],
+  "git.branchProtectionPrompt": "alwaysCommit",
+
+  // ── Claude Code extension ─────────────────────────────────────────────────
+  // The extension auto-reads CLAUDE.md from project root.
+  // CLAUDE.md mandates reading COORDINATION.md before any action.
+  "claude.enableTelemetry": false,
+
+  // ── Gemini Code Assist ────────────────────────────────────────────────────
+  // Gemini reads GEMINI.md from project root automatically.
+  // No extra config needed — file presence is the trigger.
+  "geminicodeassist.project": "leadgenai",
+
+  // ── Task runner ──────────────────────────────────────────────────────────
+  // Auto-commit watcher task runs on folder open (defined in tasks.json)
+  "task.allowAutomaticTasks": "on",
+
+  // ── TypeScript / ESLint ──────────────────────────────────────────────────
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "[typescript]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "[typescriptreact]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "eslint.validate": ["javascript", "typescript", "typescriptreact"],
+
+  // ── File associations ─────────────────────────────────────────────────────
+  "files.associations": {
+    "COORDINATION.md": "markdown",
+    "CLAUDE.md": "markdown",
+    "GEMINI.md": "markdown",
+    "AGENTS.md": "markdown"
+  },
+
+  // ── Exclude noise from explorer ───────────────────────────────────────────
+  "files.exclude": {
+    "**/.next": true,
+    "**/node_modules": true,
+    "**/.git": true
+  }
+}

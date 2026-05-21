@@ -1,0 +1,39 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Auto-Commit Watcher",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": ["-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\.vscode\\watch-commit.ps1"],
+      "isBackground": true,
+      "problemMatcher": [],
+      "runOptions": {
+        "runOn": "folderOpen"
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated",
+        "label": "Auto-Commit",
+        "showReuseMessage": false,
+        "clear": true
+      },
+      "group": "none"
+    },
+    {
+      "label": "Pull Latest (all agents)",
+      "type": "shell",
+      "command": "git pull --rebase origin master",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    },
+    {
+      "label": "Init Coordination (new project)",
+      "type": "shell",
+      "command": "powershell.exe",
+      "args": ["-ExecutionPolicy", "Bypass", "-File", "${env:USERPROFILE}\\.claude\\scripts\\init-coordination.ps1", "-ProjectPath", "${workspaceFolder}"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "shared" }
+    }
+  ]
+}

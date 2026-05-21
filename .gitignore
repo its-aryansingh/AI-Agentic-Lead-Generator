@@ -40,7 +40,9 @@ next-env.d.ts
 
 # IDE
 .idea/
-.vscode/
+# .vscode/ — shared project config IS committed (settings, tasks, mcp, watch script)
+.vscode/*.code-workspace
+.vscode/launch.json
 *.swp
 *.swo
 

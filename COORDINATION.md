@@ -654,6 +654,20 @@ All agents commit to `master`. Only push to `main` when Aryan explicitly approve
 - `AGENTS.md` v2 — mandatory checklist for Codex, harder enforcement language
 - **HANDOFF:** Next priority = implement real Inbox page. Antigravity CLI should claim inbox/page.tsx in Section 0.2 and implement the reply-thread UI. Claude CLI will handle any backend work needed.
 
+### 2026-05-21 | Claude CLI | BUILD — IDE Extension + Global Coordination System
+- **`.vscode/settings.json`** — VS Code project settings: auto-save 1s, formatOnSave, auto-commit task on folder open, file associations for COORDINATION.md/CLAUDE.md/GEMINI.md
+- **`.vscode/tasks.json`** — `"runOn": "folderOpen"` task that launches watch-commit.ps1 as a background process silently every time VS Code opens this project
+- **`.vscode/watch-commit.ps1`** — PowerShell watcher polling every 45s: auto-stages + commits any uncommitted changes; post-commit hook then auto-pushes; skips lock files, .next/, build artifacts; guards against committing .env.local
+- **`.vscode/mcp.json`** — Updated to use `${env:GITHUB_TOKEN}` instead of prompting; covers Claude Code extension, Gemini Code Assist, Copilot simultaneously
+- **`GEMINI.md`** — Gemini Code Assist context file; same ⛔ hard-stop checklist as CLAUDE.md; mandates reading COORDINATION.md, claiming files, recording actions
+- **`~/.claude/CLAUDE.md`** — Global Claude CLI instructions: applies to ALL projects; enforces identity, commit rules, security, and coordination file protocol
+- **`~/.git-template/hooks/`** — Three smart global hooks (pre-commit, commit-msg, post-commit): auto-activate full enforcement when COORDINATION.md exists; strip AI attribution from every repo on this machine; global git config `init.templateDir` set so every new git init/clone inherits them automatically
+- **`~/.claude/scripts/init-coordination.ps1`** — One-command project initializer: creates COORDINATION.md, CLAUDE.md, GEMINI.md, .githooks/, .claude/settings.json, .vscode/* in any project; sets git identity and hooksPath
+- **COORDINATION.md Section 12c** — IDE extension coordination map, auto-commit watcher doc, VS Code MCP config doc
+- **COORDINATION.md Section 12d** — Global coordination system doc, projects table, new-project setup instructions
+- **DECISION:** Auto-commit watcher is a safety net (45s polling) not a replacement for agent-explicit commits. Agents should still commit after each logical unit. The watcher catches anything missed.
+- **DECISION:** Global hooks use conditional enforcement (check for COORDINATION.md) so they don't break pre-existing repos that have different identity requirements.
+
 ### 2026-05-21 | Claude CLI | BUILD — GitHub MCP + Auto-Push System
 - **Git identity fixed:** local config now `Aryan Singh <arajsingh0505@gmail.com>` (was `Aryan / aryan@local`)
 - **`.githooks/pre-commit`** — blocks commits if identity is wrong or `.env.local` / service-role key is staged
@@ -666,6 +680,96 @@ All agents commit to `master`. Only push to `main` when Aryan explicitly approve
 - **CLAUDE.md, .antigravitycli/CONTEXT.md, AGENTS.md** — auto-push rules added to hard-rules list
 - **DECISION:** Hooks live in `.githooks/` (committed to repo) not `.git/hooks/` (ignored) so all agents on any clone get them automatically after running `git config core.hooksPath .githooks`
 - **NEXT:** Aryan must set `GITHUB_TOKEN` env var (Windows: System env vars) for GitHub MCP to activate. Auto-push works immediately via git hooks — no token needed for that.
+
+---
+
+## Section 12c — IDE Extension Coordination (Claude Code + Gemini + Copilot)
+
+> This section governs how VS Code AI extensions interact with the project.
+
+### Extension → Context File Mapping
+
+| Extension | Context File Read | Location |
+|---|---|---|
+| Claude Code (VS Code ext) | `CLAUDE.md` | project root — auto-loaded |
+| Claude CLI (terminal) | `~/.claude/CLAUDE.md` then project `CLAUDE.md` | global then project |
+| Gemini Code Assist | `GEMINI.md` | project root — auto-loaded |
+| GitHub Copilot | `.github/copilot-instructions.md` | project root |
+| Antigravity CLI | `.antigravitycli/CONTEXT.md` | project root — auto-loaded |
+| Codex | `AGENTS.md` | project root |
+
+All context files point to `COORDINATION.md` as the master. Extensions read their file → get redirected here → must follow all rules.
+
+### What Each Extension Must Do
+
+All extensions obey the same 9-item mandatory checklist (Section 12). No extension is exempt.
+
+**Claude Code extension:** Reads `CLAUDE.md` on every session. That file opens with the ⛔ hard-stop checklist. The extension cannot bypass this — it reads the file before generating suggestions.
+
+**Gemini Code Assist:** Reads `GEMINI.md` on project open. Same hard-stop checklist. Gemini must claim files in Section 0.2 before editing and record in Section 13 after.
+
+**Both extensions:** The `.vscode/mcp.json` wires both to the GitHub MCP server (via Docker / `ghcr.io/github/github-mcp-server`), giving them GitHub API context for the repo.
+
+### VS Code Auto-Commit Watcher
+
+A background task runs automatically when VS Code opens the project (`"runOn": "folderOpen"` in `.vscode/tasks.json`):
+- Script: `.vscode/watch-commit.ps1`
+- Polls every **45 seconds**
+- If uncommitted changes exist: stages everything (except `.env.local`, `*.key`, `*.pem`), commits with `auto: N file(s) updated [HH:mm]`
+- The `post-commit` hook immediately pushes to GitHub
+- Acts as a safety net: even if an agent forgets to commit, changes land on GitHub within 45 seconds
+
+**This means no agent's work is ever lost locally.** Every file save eventually gets committed and pushed.
+
+### VS Code MCP Configuration
+
+File: `.vscode/mcp.json`
+- Uses official GitHub MCP server (`ghcr.io/github/github-mcp-server` via Docker)
+- Reads `GITHUB_TOKEN` from Windows user environment variable
+- Active for: Claude Code extension, Gemini Code Assist, GitHub Copilot (all VS Code extensions that support MCP)
+- Toolsets: repos, issues, pull_requests, actions, code_security, users, context
+
+---
+
+## Section 12d — Global Coordination (All Projects on This Machine)
+
+### How Every New Project Gets Coordination Automatically
+
+**Global git template** at `C:\Users\user\.git-template\`:
+- Every `git init` and `git clone` automatically copies these hooks into the new repo's `.git/hooks/`
+- Hooks are "smart": full enforcement only when `COORDINATION.md` exists; minimal safety checks otherwise
+- The `commit-msg` hook strips AI attribution globally — from every repo on this machine
+
+**Global Claude CLI instructions** at `~/.claude/CLAUDE.md`:
+- Claude CLI reads this before any project-level `CLAUDE.md`
+- Sets global identity, commit, security, and coordination rules
+- Lists all coordinated projects so Claude knows the scope
+
+**One-command project initializer**: `~/.claude/scripts/init-coordination.ps1`
+- Creates COORDINATION.md, CLAUDE.md, GEMINI.md, .githooks/, .claude/, .vscode/ in any project
+- Sets git identity and hooksPath
+- Usage: `& "$env:USERPROFILE\.claude\scripts\init-coordination.ps1"`
+- Use `-Force` to overwrite existing files, `-ProjectPath "C:\..."` for explicit path
+
+### Projects Currently Using This Coordination System
+
+| Project | Path | Repo | Since |
+|---|---|---|---|
+| LeadGenAI | `Desktop/Projects/ai agentic lead generator` | `its-aryansingh/AI-Agentic-Lead-Generator` | 2026-05-21 |
+| *(future projects go here)* | — | — | — |
+
+### Adding a New Project
+
+```powershell
+# 1. In PowerShell, navigate to the new project
+cd "C:\path\to\new\project"
+
+# 2. Run the initializer
+& "$env:USERPROFILE\.claude\scripts\init-coordination.ps1"
+
+# 3. Open in VS Code — auto-commit watcher starts automatically
+code .
+```
 
 ---
 
