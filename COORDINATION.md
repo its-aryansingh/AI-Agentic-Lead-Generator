@@ -44,7 +44,7 @@ Update this table when you START and when you FINISH. Format: `[AGENT] | [STATUS
 | Agent | Status | Current Task | Files Being Touched | Started |
 |---|---|---|---|---|
 | Claude CLI | 💤 Idle | — | — | 2026-05-21 |
-| Antigravity CLI | 💤 Idle | — | — | 2026-05-21 |
+| Antigravity CLI | ✅ Active | Billing (Razorpay + Stripe integration) | app/app/settings/billing/*, app/(marketing)/pricing/*, app/api/webhooks/*, lib/billing.ts, package.json | 2026-05-21 |
 | Codex | 💤 Idle | — | — | 2026-05-21 |
 
 > **Status codes:** `✅ Active` / `💤 Idle` / `🔒 File Lock` / `⏸ Blocked` / `✔ Done (update log then clear)`
@@ -56,7 +56,16 @@ Before editing any file, add it here. Remove it when your commit is done.
 
 | File | Claimed By | Reason | Claimed At |
 |---|---|---|---|
-| *(none currently locked)* | — | — | — |
+| `app/app/settings/billing/*` | Antigravity CLI | Billing UI | 2026-05-21 |
+| `app/(marketing)/pricing/*` | Antigravity CLI | Pricing page | 2026-05-21 |
+| `app/api/webhooks/*` | Antigravity CLI | Stripe/Razorpay webhooks | 2026-05-21 |
+| `lib/billing.ts` | Antigravity CLI | Billing logic | 2026-05-21 |
+| `package.json` | Antigravity CLI | Add Stripe/Razorpay SDKs | 2026-05-21 |
+| `app/app/settings/billing/*` | Antigravity CLI | Billing UI | 2026-05-21 |
+| `app/(marketing)/pricing/*` | Antigravity CLI | Pricing page | 2026-05-21 |
+| `app/api/webhooks/*` | Antigravity CLI | Stripe/Razorpay webhooks | 2026-05-21 |
+| `lib/billing.ts` | Antigravity CLI | Billing logic | 2026-05-21 |
+| `package.json` | Antigravity CLI | Add Stripe/Razorpay SDKs | 2026-05-21 |
 
 ### 0.3 — Simultaneous Work Protocol
 
@@ -649,6 +658,25 @@ Every agent must follow these exactly. No exceptions.
 - **TS type fix**: removed dead `"none"` from `dbConfidence` union in `handleStartBulkJob`; comparison was always-false and caused build failure.
 - **middleware.ts / proxy.ts resolution**: `proxy.ts` (committed) had wrong export name `export function proxy` — never valid Next.js middleware. `middleware.ts` existed on disk (untracked) with correct export. Rewrote `middleware.ts` with better Supabase cookie handling (mutate single response object) and added /login → /app/chat redirect for already-signed-in users. Staged proxy.ts deletion, tracked middleware.ts.
 - **DECISION**: proxy.ts was never functional middleware (wrong function name). middleware.ts is the single source of truth for auth. Both Supabase cookie patterns are correct; used the single-response-mutation pattern to avoid dropped cookies.
+
+### 2026-05-21 | Claude CLI | BUILD — Playwright scraper microservice
+- Claimed: `scraper/*`, `lib/providers/scraper-client.ts`, `lib/agent/tool-handlers.ts`, `.env.example`
+- **scraper/ service** (separate Fly.io deployable):
+  - `scraper/Dockerfile` — `mcr.microsoft.com/playwright:v1.48.0-jammy` base, tsc build, node dist/server.js
+  - `scraper/fly.toml` — Singapore region, 1GB RAM, 0-3 VMs, auto-stop when idle, max 6 concurrent requests
+  - `scraper/package.json` + `tsconfig.json` — Fastify 4 + Playwright 1.48, CommonJS target
+  - `scraper/src/server.ts` — Fastify server; auth hook (`x-scraper-key` header); `/health` exempt; `/scrape/company` + `/scrape/news` endpoints
+  - `scraper/src/handlers/health.ts` — `GET /health` with version
+  - `scraper/src/handlers/company-site.ts` — Playwright chromium; visits 6 team/about/contact paths; email regex extraction; per-target name title detection; 2s per-domain rate limit; generic email filter (noreply/support/info etc.)
+  - `scraper/src/handlers/news.ts` — DuckDuckGo JSON fetch (no browser, no key); parses JSONP wrapper; returns up to 5 articles with title/url/snippet/date
+- **`lib/providers/scraper-client.ts`** — typed HTTP client with 30s timeout; mock fallback when `SCRAPER_URL`/`SCRAPER_KEY` unset; `scrapeCompany()` + `scrapeNews()`
+- **`lib/agent/tool-handlers.ts`** — upgraded `handleEnrichProspect`:
+  - Resolves domain from `company_domain` param or `guessDomainFromCompany()`
+  - Parallel `getOrSetCache`-wrapped calls to `scrapeCompany` (30d TTL) + `scrapeNews` (7d TTL)
+  - Email priority: scraped+name-matched > scraped first > pattern-guessed+MX-verified > none
+  - Passes news summary to `draftForProspect` for personalisation context
+  - Returns full enrichment object: email/confidence/source, scraped_emails, recent_news, draft
+- TypeScript: clean (exit 0). ESLint: clean. No new dependencies in main app.
 
 ### 2026-05-21 | Claude CLI | COMMIT — a1958d4
 - Read full COORDINATION.md; confirmed all agents idle and no file claims active.

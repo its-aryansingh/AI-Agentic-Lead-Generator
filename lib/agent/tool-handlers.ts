@@ -14,6 +14,7 @@ import { searchGithubUsers } from "@/lib/providers/github"
 import { searchHnUsers } from "@/lib/providers/hn-algolia"
 import { getOrSetCache } from "@/lib/cache"
 import { bestGuessEmail, guessDomainFromCompany, verifyDomainMx } from "@/lib/email-patterns"
+import { scrapeCompany, scrapeNews } from "@/lib/providers/scraper-client"
 import { checkCredits, deductCredits } from "@/lib/credits"
 import { sha256Email } from "@/lib/email-compliance"
 import { inngest } from "@/inngest/client"
@@ -158,17 +159,6 @@ export async function handleEnrichProspect(
   },
   ctx: ToolContext,
 ) {
-  // Use the discovery candidate shape so the drafter has consistent input.
-  const candidate: ProspectCandidate = {
-    name: params.name,
-    title: "(unknown role)",
-    company: params.company ?? "(unknown company)",
-    source: params.linkedin_url ? "brave" : "mock",
-    source_url: params.linkedin_url ?? "",
-    snippet: `Named-prospect enrichment for ${params.name}${params.company ? ` at ${params.company}` : ""}.`,
-  }
-
-  // Pull the user's voice anchor if they've set one.
   const supabase = createAdminClient()
   const { data: user } = await supabase
     .from("users")
@@ -176,13 +166,86 @@ export async function handleEnrichProspect(
     .eq("id", ctx.userId)
     .maybeSingle()
 
+  // Resolve the domain: prefer explicitly provided, then guess from company name.
+  const domain =
+    params.company_domain?.replace(/^https?:\/\//, "").replace(/\/.*$/, "") ||
+    (params.company ? guessDomainFromCompany(params.company) : null)
+
+  // Scrape company site + news in parallel (both have mock fallbacks when
+  // SCRAPER_URL/SCRAPER_KEY are not set).
+  const [companyScrape, newsScrape] = await Promise.all([
+    domain
+      ? getOrSetCache(`company:${domain}`, 30 * 86400, () =>
+          scrapeCompany({ domain: domain!, target_name: params.name }),
+        )
+      : Promise.resolve(null),
+    params.company
+      ? getOrSetCache(`news:${domain ?? params.company}`, 7 * 86400, () =>
+          scrapeNews({ company_name: params.company!, domain: domain ?? undefined }),
+        )
+      : Promise.resolve(null),
+  ])
+
+  // Email resolution: extracted from site > pattern-guessed with MX check > none.
+  let email: string | null = null
+  let emailSource: "extracted" | "pattern_guessed" | "none" = "none"
+  let emailConfidence: "risky" | "invalid" | "unknown" = "unknown"
+
+  if (companyScrape && companyScrape.emails.length > 0) {
+    // Try to find an email that matches the prospect's name.
+    const lower = params.name.toLowerCase()
+    const nameParts = lower.split(/\s+/)
+    const matched =
+      companyScrape.emails.find((e) => nameParts.some((p) => e.startsWith(p))) ??
+      companyScrape.emails[0]
+    email = matched
+    emailSource = "extracted"
+    emailConfidence = "risky"
+  } else if (domain) {
+    const guess = bestGuessEmail(params.name, domain)
+    if (guess) {
+      const mx = await verifyDomainMx(domain)
+      if (mx.confidence === "no_mx") {
+        emailConfidence = "invalid"
+      } else {
+        email = guess.email
+        emailSource = "pattern_guessed"
+        emailConfidence = mx.confidence === "unknown" ? "unknown" : "risky"
+      }
+    }
+  }
+
+  // Build a news summary string to pass to the drafter.
+  const newsSummary =
+    newsScrape && newsScrape.articles.length > 0
+      ? newsScrape.articles
+          .map((a) => `- ${a.title}: ${a.snippet}`)
+          .join("\n")
+      : null
+
+  const candidate: ProspectCandidate = {
+    name: params.name,
+    title: companyScrape?.matched_target ?? "(unknown role)",
+    company: params.company ?? "(unknown company)",
+    source: params.linkedin_url ? "brave" : "mock",
+    source_url: params.linkedin_url ?? "",
+    snippet: `Named-prospect enrichment for ${params.name}${params.company ? ` at ${params.company}` : ""}.`,
+  }
+
   const draft = await draftForProspect({
     prospect: candidate,
     voiceAnchor: user?.voice_anchor_text ?? null,
+    news: newsSummary,
   })
 
   return {
     prospect: candidate,
+    email,
+    email_source: emailSource,
+    email_confidence: emailConfidence,
+    company_domain: domain,
+    scraped_emails: companyScrape?.emails ?? [],
+    recent_news: newsScrape?.articles ?? [],
     draft,
   }
 }
