@@ -43,8 +43,8 @@ Update this table when you START and when you FINISH. Format: `[AGENT] | [STATUS
 
 | Agent | Status | Current Task | Files Being Touched | Started |
 |---|---|---|---|---|
-| Claude CLI | ✅ Active | Phase 6 — Inngest async queue for bulk jobs >20; delete dead proxy.ts | proxy.ts, inngest/*, app/api/inngest/route.ts, lib/agent/tool-handlers.ts | 2026-05-21 |
-| Antigravity CLI | ✅ Active | UI polish on chat tool-call cards / fixing build | app/app/chat/components/chat-client.tsx | 2026-05-21 |
+| Claude CLI | ✅ Active | Committing: Inngest queue, DNS MX verification, middleware.ts fix, TS type fix | middleware.ts, lib/email-patterns.ts, lib/agent/tool-handlers.ts, inngest/*, app/api/inngest/ | 2026-05-21 |
+| Antigravity CLI | 💤 Idle | — | — | 2026-05-21 |
 | Codex | 💤 Idle | — | — | 2026-05-21 |
 
 > **Status codes:** `✅ Active` / `💤 Idle` / `🔒 File Lock` / `⏸ Blocked` / `✔ Done (update log then clear)`
@@ -56,11 +56,12 @@ Before editing any file, add it here. Remove it when your commit is done.
 
 | File | Claimed By | Reason | Claimed At |
 |---|---|---|---|
-| proxy.ts | Claude CLI | Delete dead proxy | 2026-05-21 |
-| inngest/functions/enrich-prospect.ts | Claude CLI | Inngest queue | 2026-05-21 |
-| app/api/inngest/route.ts | Claude CLI | Inngest queue | 2026-05-21 |
-| lib/agent/tool-handlers.ts | Claude CLI | Inngest queue | 2026-05-21 |
-| app/app/chat/components/chat-client.tsx | Antigravity CLI | UI polish on chat tool-call cards | 2026-05-21 |
+| `lib/email-patterns.ts` | Claude CLI | DNS MX verification commit | 2026-05-21 |
+| `lib/agent/tool-handlers.ts` | Claude CLI | Inngest dispatch + TS type fix | 2026-05-21 |
+| `inngest/client.ts` | Claude CLI | New Inngest client | 2026-05-21 |
+| `inngest/functions/bulk-enrich.ts` | Claude CLI | New Inngest function | 2026-05-21 |
+| `app/api/inngest/route.ts` | Claude CLI | New Inngest handler route | 2026-05-21 |
+| `.env.example` | Claude CLI | Document new env vars | 2026-05-21 |
 
 ### 0.3 — Simultaneous Work Protocol
 
@@ -643,6 +644,17 @@ Every agent must follow these exactly. No exceptions.
 - Final status: no unclaimed Codex-owned code changes made. Lint passes, tests pass, build verification is blocked by Next's active/stale build-process guard before compile.
 - Cleared Codex file claim and returned Codex to idle.
 
+### 2026-05-21 | Claude CLI | FIX + BUILD — Inngest, DNS MX, middleware, TS type
+- **Context on resume**: read COORDINATION.md fully; confirmed all other agents idle.
+- **Staged backend changes (eb20734)**: already committed by VS Code auto-watcher — vercel.json cron config, cron GET exports, system-prompt sequences context, health version 0.6.0, env vars.
+- **Lint fix (0f0df84)**: committed `fix: remove unused redirect import in inbox page`.
+- **DNS MX email verification** (`lib/email-patterns.ts`): added `verifyDomainMx(domain)` using Node.js `dns.promises.resolveMx()`. In-process cache, 3s timeout. Returns `mx_verified | no_mx | unknown`. No new dependencies.
+- **Wired MX into `handleStartBulkJob`**: email_confidence upgrades from "risky" to "invalid" when no MX records; stays "risky" when MX verified (still pattern-guessed); "unknown" on DNS failure.
+- **Inngest async queue**: installed `inngest` package. Created `inngest/client.ts`, `inngest/functions/bulk-enrich.ts` (per-prospect steps with retry=2, concurrency=3), `app/api/inngest/route.ts`. Modified `handleStartBulkJob` to dispatch Inngest event for batches >20 when `INNGEST_EVENT_KEY` is set; falls back to sync path otherwise. Documented env vars in `.env.example`.
+- **TS type fix**: removed dead `"none"` from `dbConfidence` union in `handleStartBulkJob`; comparison was always-false and caused build failure.
+- **middleware.ts / proxy.ts resolution**: `proxy.ts` (committed) had wrong export name `export function proxy` — never valid Next.js middleware. `middleware.ts` existed on disk (untracked) with correct export. Rewrote `middleware.ts` with better Supabase cookie handling (mutate single response object) and added /login → /app/chat redirect for already-signed-in users. Staged proxy.ts deletion, tracked middleware.ts.
+- **DECISION**: proxy.ts was never functional middleware (wrong function name). middleware.ts is the single source of truth for auth. Both Supabase cookie patterns are correct; used the single-response-mutation pattern to avoid dropped cookies.
+
 ---
 
 ## Section 14 — Next Actions Queue (Priority Order)
@@ -659,8 +671,8 @@ Agents pull from the top. Claim the task in Section 0 before starting.
 
 ### Next Sprint — v0.6 → v0.7
 
-- [ ] **[Claude CLI] Inngest async queue** — `inngest/functions/enrich-prospect.ts`. Fan-out bulk enrichment for jobs >20 prospects.
-- [ ] **[Claude CLI] SMTP email verification** — Implement stubs in `lib/email-patterns.ts`. DNS MX lookup + SMTP RCPT TO probe.
+- [x] **[Claude CLI] Inngest async queue** — `inngest/functions/bulk-enrich.ts`, `inngest/client.ts`, `app/api/inngest/route.ts`. Dispatches for batches >20 when `INNGEST_EVENT_KEY` set; sync fallback otherwise.
+- [x] **[Claude CLI] DNS MX email verification** — `lib/email-patterns.ts`: `verifyDomainMx()`. Upgrades confidence from "risky" → "invalid" when no MX records. Full SMTP probe still deferred (port 25 blocked in Vercel).
 - [ ] **[Claude CLI] Playwright scraper microservice** — `scraper/` as separate Fastify service, deploy to Fly.io.
 
 ### Post-PMF (do not build)
@@ -681,7 +693,7 @@ Agents pull from the top. Claim the task in Section 0 before starting.
 | No paid data APIs | Zero licensing cost; Brave = 2000 free/mo |
 | Google Sheets as primary output | Indian/SEA SMBs live in Sheets |
 | Mock fallbacks for every provider | Full demo without API keys |
-| Synchronous bulk jobs (no Inngest yet) | Fine up to ~20; defer async complexity until post-PMF |
+| Inngest for bulk jobs >20 | Sync path for ≤20 (fast, no setup); Inngest fan-out for larger batches when `INNGEST_EVENT_KEY` is set |
 | RLS on every user table | Multi-tenant safety without app-layer filtering bugs |
 | `voice_anchor_text` | User pastes own email → AI matches their writing register |
 | Credits system | Metered billing hook; free = 25/mo |

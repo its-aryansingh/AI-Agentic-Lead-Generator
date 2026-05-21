@@ -13,11 +13,16 @@ import { exportToSheet, rowsToCsv } from "@/lib/providers/google-sheets"
 import { searchGithubUsers } from "@/lib/providers/github"
 import { searchHnUsers } from "@/lib/providers/hn-algolia"
 import { getOrSetCache } from "@/lib/cache"
-import { bestGuessEmail, guessDomainFromCompany } from "@/lib/email-patterns"
+import { bestGuessEmail, guessDomainFromCompany, verifyDomainMx } from "@/lib/email-patterns"
 import { checkCredits, deductCredits } from "@/lib/credits"
 import { sha256Email } from "@/lib/email-compliance"
+import { inngest } from "@/inngest/client"
 
 import type { ToolContext } from "./tools"
+
+// Batches larger than this threshold are handed off to Inngest so they run
+// in the background instead of blocking the streaming chat response.
+const INNGEST_THRESHOLD = 20
 
 // ---------------------------------------------------------------------
 // web_search
@@ -337,24 +342,58 @@ export async function handleStartBulkJob(
   const voiceAnchor =
     (userRow?.voice_anchor_text as string | null | undefined) ?? null
 
+  // Large batches: hand off to Inngest so the chat response doesn't block
+  // waiting for 20+ LLM calls. Requires INNGEST_EVENT_KEY in env.
+  if (candidates.length > INNGEST_THRESHOLD && process.env.INNGEST_EVENT_KEY) {
+    await inngest.send({
+      name: "leadgen/bulk.start",
+      data: {
+        job_id: job.id as string,
+        user_id: ctx.userId,
+        candidates,
+        draft_email: params.draft_email,
+        voice_anchor: voiceAnchor,
+      },
+    })
+    return {
+      job_id: job.id,
+      prospect_count: candidates.length,
+      queued: true,
+      message:
+        `Queued ${candidates.length} prospects for enrichment — running in the background. ` +
+        `Check the Jobs page in a few minutes to download your Sheet and CSV.`,
+      credits_remaining: deduction.remaining,
+    }
+  }
+
   // 3. Enrich each candidate in parallel (concurrency 3 = polite).
   const drafts = await mapConcurrent(candidates, 3, async (c) => {
     const draft = params.draft_email
       ? await draftForProspect({ prospect: c, voiceAnchor })
       : null
-    // Email guess — domain inferred from company name, then the
-    // "first.last" pattern (most common at modern SaaS companies).
+
     const domain = guessDomainFromCompany(c.company)
     const guess = domain ? bestGuessEmail(c.name, domain) : null
+
+    // DNS MX check: upgrade from "risky" to a more precise confidence.
+    // mx_verified → domain has mail exchangers (store as "risky", still guessed).
+    // no_mx       → domain can't receive email at all   (store as "invalid").
+    // unknown     → DNS timed out or failed             (store as "unknown").
+    let dbConfidence: "risky" | "invalid" | "unknown" = guess ? "risky" : "unknown"
+    if (domain && guess) {
+      const mx = await verifyDomainMx(domain)
+      if (mx.confidence === "no_mx") dbConfidence = "invalid"
+      else if (mx.confidence === "unknown") dbConfidence = "unknown"
+      // mx_verified stays "risky" — pattern-guessed but domain is mail-enabled
+    }
+
     return {
       candidate: c,
       draft,
       domain,
-      email: guess?.email ?? null,
-      email_source: (guess ? "pattern_guessed" : "none") as
-        | "pattern_guessed"
-        | "none",
-      email_confidence: (guess ? "risky" : "unknown") as "risky" | "unknown",
+      email: dbConfidence === "invalid" ? null : (guess?.email ?? null),
+      email_source: (guess ? "pattern_guessed" : "none") as "pattern_guessed" | "none",
+      email_confidence: dbConfidence,
     }
   })
 

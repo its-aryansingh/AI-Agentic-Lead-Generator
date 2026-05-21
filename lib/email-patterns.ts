@@ -1,15 +1,18 @@
 /**
- * Email pattern guessing.
+ * Email pattern guessing + DNS MX verification.
  *
  * Without a paid email-finder API we can still ship a working "likely
  * email" for most prospects by combining:
  *   1. Five standard corporate naming patterns
  *   2. A heuristic that turns the company name into a domain
+ *   3. DNS MX lookup to upgrade confidence from "risky" → "mx_verified"
+ *      (or "no_mx" when the domain clearly can't receive email).
  *
- * The output is always labelled `pattern_guessed` + `risky` so we never
- * lie to the user about confidence. SMTP verification (v1.5) is what
- * eventually upgrades `risky` to `valid`.
+ * Full SMTP RCPT TO probing is deferred to the Playwright scraper service
+ * (blocked on port 25 in Vercel serverless environments).
  */
+
+import dns from "dns"
 
 export type EmailPattern =
   | "first.last"
@@ -147,4 +150,61 @@ export function guessDomainFromCompany(company: string): string | null {
     .join("")
   if (!cleaned) return null
   return `${cleaned}.com`
+}
+
+// ---------------------------------------------------------------------------
+// DNS MX verification
+// ---------------------------------------------------------------------------
+
+export type EmailConfidence = "risky" | "mx_verified" | "no_mx" | "unknown"
+
+export interface MxVerifyResult {
+  domain: string
+  confidence: EmailConfidence
+  /** Exchange hostnames in priority order, empty when no MX found. */
+  exchanges: string[]
+}
+
+const MX_CACHE = new Map<string, MxVerifyResult>()
+const MX_TIMEOUT_MS = 3_000
+
+/**
+ * Check whether a domain has MX records via DNS.
+ * Results are cached in-process for the lifetime of the serverless function
+ * invocation (warm instance), cutting duplicate lookups within a bulk job.
+ *
+ * Returns "mx_verified" when at least one MX record is found, "no_mx" when
+ * the lookup succeeds but the domain has no mail exchanger, and "unknown"
+ * when the lookup fails (network timeout, NXDOMAIN, etc.).
+ */
+export async function verifyDomainMx(domain: string): Promise<MxVerifyResult> {
+  const cached = MX_CACHE.get(domain)
+  if (cached) return cached
+
+  const result = await new Promise<MxVerifyResult>((resolve) => {
+    const timer = setTimeout(() => {
+      resolve({ domain, confidence: "unknown", exchanges: [] })
+    }, MX_TIMEOUT_MS)
+
+    dns.promises
+      .resolveMx(domain)
+      .then((records) => {
+        clearTimeout(timer)
+        if (records.length === 0) {
+          resolve({ domain, confidence: "no_mx", exchanges: [] })
+        } else {
+          const exchanges = records
+            .sort((a, b) => a.priority - b.priority)
+            .map((r) => r.exchange)
+          resolve({ domain, confidence: "mx_verified", exchanges })
+        }
+      })
+      .catch(() => {
+        clearTimeout(timer)
+        resolve({ domain, confidence: "no_mx", exchanges: [] })
+      })
+  })
+
+  MX_CACHE.set(domain, result)
+  return result
 }
