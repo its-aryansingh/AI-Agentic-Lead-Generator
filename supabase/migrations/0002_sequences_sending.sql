@@ -90,6 +90,7 @@ create table if not exists public.campaigns (
   user_id                uuid not null references public.users(id) on delete cascade,
   mailbox_id             uuid references public.mailboxes(id) on delete set null,
   sequence_id            uuid references public.sequences(id) on delete set null,
+  source_job_id          uuid references public.jobs(id) on delete set null,
   name                   text not null,
   status                 text not null default 'draft'
     check (status in ('draft', 'active', 'paused', 'completed')),

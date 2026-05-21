@@ -573,6 +573,7 @@ export async function handleLaunchCampaign(
     }
     recipientInserts.push({
       campaign_id: campaign.id,
+      user_id: ctx.userId,
       prospect_id: p.id,
       email: p.email,
       subject: p.email_subject,
