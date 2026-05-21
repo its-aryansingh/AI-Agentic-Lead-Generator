@@ -20,6 +20,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
+import { Globe, UserCheck, Database, Send, HelpCircle, Loader2 } from "lucide-react"
 import { csvToProspects, type ParsedProspect } from "@/lib/csv-parse"
 
 interface ChatMessage {
@@ -392,9 +393,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 function ToolCallCard({ toolCall }: { toolCall: ToolCall }) {
   if (toolCall.state === "running") {
     return (
-      <Card size="sm" className="bg-muted/40">
-        <CardContent className="text-xs text-muted-foreground py-2">
-          Running <code className="font-mono">{toolCall.toolName}</code>…
+      <Card size="sm" className="bg-muted/20 border-muted-foreground/20 overflow-hidden relative">
+        <div className="absolute top-0 left-0 h-[2px] w-1/3 bg-primary animate-pulse-fast" style={{ animation: "slideRight 1.5s infinite linear" }} />
+        <CardContent className="text-xs text-muted-foreground py-3 flex items-center gap-3">
+          <Loader2 className="w-4 h-4 animate-spin text-primary" />
+          <span>Running <code className="font-mono text-primary bg-primary/10 px-1 py-0.5 rounded">{toolCall.toolName}</code>…</span>
         </CardContent>
       </Card>
     )
@@ -420,22 +423,23 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCall }) {
 
 function WebSearchCard({ result }: { result: WebSearchResult }) {
   return (
-    <Card size="sm">
-      <CardHeader className="px-4">
-        <CardTitle>
+    <Card size="sm" className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors">
+      <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Globe className="w-4 h-4 text-primary" />
           Found {result.count} candidate{result.count === 1 ? "" : "s"}
           {result.using_mock_data && (
-            <Badge variant="secondary" className="ml-2 align-middle">
+            <Badge variant="secondary" className="ml-auto align-middle text-[10px]">
               demo data
             </Badge>
           )}
         </CardTitle>
       </CardHeader>
-      <CardContent>
-        <ul className="flex flex-col gap-2">
+      <CardContent className="p-4">
+        <ul className="flex flex-col gap-3">
           {result.candidates.slice(0, 8).map((c, i) => (
-            <li key={c.id ?? i} className="flex flex-col">
-              <span className="font-medium">{c.name}</span>
+            <li key={c.id ?? i} className="flex flex-col group">
+              <span className="font-medium group-hover:text-primary transition-colors">{c.name}</span>
               <span className="text-xs text-muted-foreground">
                 {c.title} · {c.company}
               </span>
@@ -443,7 +447,7 @@ function WebSearchCard({ result }: { result: WebSearchResult }) {
           ))}
         </ul>
         {result.candidates.length > 8 && (
-          <div className="text-xs text-muted-foreground mt-3">
+          <div className="text-xs text-muted-foreground mt-4 pt-3 border-t border-border/50 text-center">
             …and {result.candidates.length - 8} more
           </div>
         )}
@@ -455,9 +459,10 @@ function WebSearchCard({ result }: { result: WebSearchResult }) {
 function EnrichCard({ result }: { result: EnrichResult }) {
   const fullEmail = `Subject: ${result.draft.email_subject}\n\n${result.draft.email_body}`
   return (
-    <Card size="sm">
-      <CardHeader className="px-4">
-        <CardTitle className="flex items-center gap-2">
+    <Card size="sm" className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors">
+      <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <UserCheck className="w-4 h-4 text-primary" />
           <span>
             {result.prospect.name}{" "}
             <span className="text-muted-foreground font-normal">
@@ -467,7 +472,7 @@ function EnrichCard({ result }: { result: EnrichResult }) {
           <CopyButton text={fullEmail} label="Copy email" className="ml-auto" />
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+      <CardContent className="flex flex-col gap-4 p-4">
         <Section label="Research">{result.draft.research_summary}</Section>
         <Section label="Subject" copyText={result.draft.email_subject}>
           {result.draft.email_subject}
@@ -475,11 +480,11 @@ function EnrichCard({ result }: { result: EnrichResult }) {
         <Section label="Email" copyText={result.draft.email_body}>
           {result.draft.email_body}
         </Section>
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">
+        <div className="bg-muted/20 p-3 rounded-lg border border-border/50">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-2">
             Talking points
           </div>
-          <ul className="list-disc pl-4 text-sm flex flex-col gap-1">
+          <ul className="list-disc pl-4 text-sm flex flex-col gap-1.5 marker:text-primary/60">
             {result.draft.talking_points.map((tp, i) => (
               <li key={i}>{tp}</li>
             ))}
@@ -493,24 +498,28 @@ function EnrichCard({ result }: { result: EnrichResult }) {
 function BulkJobCard({ result }: { result: BulkJobResult }) {
   if (result.error) {
     return (
-      <Card size="sm">
-        <CardContent className="py-3 text-sm text-destructive">{result.error}</CardContent>
+      <Card size="sm" className="border-destructive/30 bg-destructive/5">
+        <CardContent className="py-3 text-sm text-destructive font-medium flex items-center gap-2">
+          <HelpCircle className="w-4 h-4" />
+          {result.error}
+        </CardContent>
       </Card>
     )
   }
   return (
-    <Card size="sm">
-      <CardHeader className="px-4">
-        <CardTitle>
+    <Card size="sm" className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors">
+      <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Database className="w-4 h-4 text-primary" />
           Enriched {result.prospect_count} prospect{result.prospect_count === 1 ? "" : "s"}
           {result.sheet_is_mock && (
-            <Badge variant="secondary" className="ml-2 align-middle">
+            <Badge variant="secondary" className="ml-auto align-middle text-[10px]">
               demo data
             </Badge>
           )}
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+      <CardContent className="flex flex-col gap-4 p-4">
         <div className="flex flex-wrap gap-2">
           {result.sheet_url && !result.sheet_is_mock && (
             <a
@@ -518,7 +527,7 @@ function BulkJobCard({ result }: { result: BulkJobResult }) {
               target="_blank"
               rel="noopener noreferrer"
               className={cn(
-                "inline-flex items-center justify-center rounded-md px-3 py-1.5 text-xs font-medium",
+                "inline-flex items-center justify-center rounded-md px-3 py-1.5 text-xs font-medium shadow-sm",
                 "bg-primary text-primary-foreground hover:bg-primary/90 transition-colors",
               )}
             >
@@ -530,8 +539,8 @@ function BulkJobCard({ result }: { result: BulkJobResult }) {
               href={result.csv_data_url}
               download={`leadgenai-prospects-${result.job_id ?? "export"}.csv`}
               className={cn(
-                "inline-flex items-center justify-center rounded-md px-3 py-1.5 text-xs font-medium",
-                "border border-border hover:bg-muted transition-colors",
+                "inline-flex items-center justify-center rounded-md px-3 py-1.5 text-xs font-medium shadow-sm",
+                "border border-border bg-card hover:bg-muted transition-colors",
               )}
             >
               Download CSV
@@ -539,14 +548,14 @@ function BulkJobCard({ result }: { result: BulkJobResult }) {
           )}
         </div>
         {result.preview && result.preview.length > 0 && (
-          <div>
-            <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">
+          <div className="bg-muted/10 p-3 rounded-lg border border-border/30">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">
               Preview
             </div>
-            <ul className="text-sm flex flex-col gap-1">
+            <ul className="text-sm flex flex-col gap-1.5">
               {result.preview.map((p, i) => (
                 <li key={i}>
-                  <span className="font-medium">{p.name}</span>{" "}
+                  <span className="font-medium text-foreground/90">{p.name}</span>{" "}
                   <span className="text-muted-foreground">
                     — {p.title} at {p.company}
                   </span>
@@ -556,15 +565,15 @@ function BulkJobCard({ result }: { result: BulkJobResult }) {
           </div>
         )}
         {typeof result.credits_remaining === "number" && (
-          <div className="text-[11px] text-muted-foreground">
+          <div className="text-[11px] text-muted-foreground flex items-center gap-1.5 mt-1 border-t border-border/50 pt-3">
             {result.credits_remaining} credit
             {result.credits_remaining === 1 ? "" : "s"} remaining
             {result.job_id && (
               <>
-                {" · "}
+                <span className="opacity-50">·</span>
                 <a
                   href={`/app/jobs/${result.job_id}`}
-                  className="underline underline-offset-2"
+                  className="hover:text-foreground transition-colors underline underline-offset-2"
                 >
                   view inline
                 </a>
@@ -580,40 +589,47 @@ function BulkJobCard({ result }: { result: BulkJobResult }) {
 function LaunchCampaignCard({ result }: { result: LaunchCampaignResult }) {
   if (result.error) {
     return (
-      <Card size="sm">
-        <CardContent className="py-3 text-sm text-destructive">
+      <Card size="sm" className="border-destructive/30 bg-destructive/5">
+        <CardContent className="py-3 text-sm text-destructive font-medium flex items-center gap-2">
+          <HelpCircle className="w-4 h-4" />
           {result.error}
         </CardContent>
       </Card>
     )
   }
   return (
-    <Card size="sm">
-      <CardHeader className="px-4">
-        <CardTitle>
+    <Card size="sm" className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors">
+      <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Send className="w-4 h-4 text-primary" />
           Campaign launched — {result.scheduled ?? 0} email
           {result.scheduled === 1 ? "" : "s"} queued
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2 text-sm">
+      <CardContent className="flex flex-col gap-3 p-4 text-sm">
         {typeof result.suppressed_skipped === "number" &&
           result.suppressed_skipped > 0 && (
-            <div className="text-xs text-muted-foreground">
-              {result.suppressed_skipped} skipped (on suppression list)
+            <div className="text-xs text-muted-foreground bg-muted/30 px-2 py-1.5 rounded border border-border/50">
+              <span className="font-medium">{result.suppressed_skipped}</span> skipped (on suppression list)
             </div>
           )}
         {result.note && (
-          <div className="text-xs text-muted-foreground">{result.note}</div>
+          <div className="text-xs text-muted-foreground italic border-l-2 border-primary/40 pl-2">
+            {result.note}
+          </div>
         )}
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap gap-4 mt-1 border-t border-border/50 pt-3">
           <a
             href="/app/pipeline"
-            className="text-xs underline underline-offset-2"
+            className="text-xs font-medium text-muted-foreground hover:text-primary transition-colors flex items-center gap-1"
           >
-            View pipeline →
+            View pipeline <span aria-hidden="true">&rarr;</span>
           </a>
-          <a href="/app/inbox" className="text-xs underline underline-offset-2">
-            Reply inbox →
+          <a 
+            href="/app/inbox" 
+            className="text-xs font-medium text-muted-foreground hover:text-primary transition-colors flex items-center gap-1"
+          >
+            Reply inbox <span aria-hidden="true">&rarr;</span>
           </a>
         </div>
       </CardContent>
@@ -623,13 +639,16 @@ function LaunchCampaignCard({ result }: { result: LaunchCampaignResult }) {
 
 function ClarifyCard({ result }: { result: ClarifyResult }) {
   return (
-    <Card size="sm" className="bg-muted/40">
-      <CardContent className="py-3 flex flex-col gap-2">
-        <div className="text-sm">{result.question}</div>
+    <Card size="sm" className="bg-primary/5 border-primary/20">
+      <CardContent className="py-4 px-4 flex flex-col gap-3">
+        <div className="text-sm font-medium text-primary flex gap-2">
+          <HelpCircle className="w-5 h-5 shrink-0" />
+          <span className="pt-0.5">{result.question}</span>
+        </div>
         {result.suggested_answers && result.suggested_answers.length > 0 && (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2 pl-7">
             {result.suggested_answers.map((s, i) => (
-              <Badge key={i} variant="outline">
+              <Badge key={i} variant="secondary" className="hover:bg-primary hover:text-primary-foreground cursor-default transition-colors">
                 {s}
               </Badge>
             ))}
