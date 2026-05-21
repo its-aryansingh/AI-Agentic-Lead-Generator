@@ -86,4 +86,11 @@ export async function upgradeUserPlan(
     console.error("[billing] Failed to update user plan", error)
     throw new Error("Failed to update user plan")
   }
+
+  // Ledger entry so the credit history reflects the paid grant.
+  await adminClient.from("credit_transactions").insert({
+    user_id: userId,
+    delta: planInfo.credits,
+    reason: `plan_upgrade_${plan}`,
+  })
 }

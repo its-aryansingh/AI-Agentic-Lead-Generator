@@ -9,17 +9,17 @@
  */
 
 import { createAdminClient } from "@/lib/supabase/server"
+import { PLANS } from "@/lib/billing-shared"
 
 /**
- * Plan-default monthly credit grants.
- * Free is the only plan exposed today; the rest are placeholders for
- * when Stripe/Razorpay are wired.
+ * Plan-default monthly credit grants. Sourced from the canonical paid PLANS
+ * catalog so a monthly reset grants exactly what the plan was sold for.
  */
 const PLAN_CREDITS: Record<string, number> = {
-  free: 25,
-  starter: 250,
-  pro: 1000,
-  agency: 5000,
+  free: PLANS.free.credits,
+  starter: PLANS.starter.credits,
+  pro: PLANS.pro.credits,
+  agency: PLANS.agency.credits,
 }
 
 /**
