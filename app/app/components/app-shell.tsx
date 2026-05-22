@@ -17,6 +17,7 @@ import {
   Settings,
   CreditCard,
   Repeat,
+  Bell,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -70,6 +71,7 @@ const NAV_SECTIONS: NavSection[] = [
       { href: "/app/settings/voice", label: "Voice anchor", icon: Mic },
       { href: "/app/settings/mailboxes", label: "Mailboxes", icon: Mail },
       { href: "/app/settings/providers", label: "Providers", icon: Settings },
+      { href: "/app/settings/notifications", label: "Notifications", icon: Bell },
       { href: "/app/settings/billing", label: "Billing & Plans", icon: CreditCard },
     ],
   },

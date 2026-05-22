@@ -19,6 +19,7 @@ import {
   startRun,
 } from "@/lib/automations"
 import { runOrchestration } from "@/lib/agent/run-orchestration"
+import { notifyWhatsApp } from "@/lib/notifications"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -61,6 +62,12 @@ export async function POST(req: Request) {
         summary: result.summary,
         error: result.error,
       })
+    }
+    if (!result.error) {
+      await notifyWhatsApp(
+        automation.user_id,
+        `✅ Automation "${automation.name}" finished. ${(result.summary ?? "").slice(0, 280)}`.trim(),
+      )
     }
     processed++
   }
