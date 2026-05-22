@@ -41,6 +41,8 @@ type ToolResult =
   | EnrichResult
   | BulkJobResult
   | ClarifyResult
+  | LaunchCampaignResult
+  | SpecialistResult
   | Record<string, unknown>
 
 interface WebSearchResult {
@@ -86,6 +88,19 @@ interface LaunchCampaignResult {
   scheduled?: number
   suppressed_skipped?: number
   note?: string
+  error?: string
+}
+
+/** Result returned by an orchestrator run_* delegation (one specialist). */
+interface SpecialistResult {
+  specialist?: string
+  role?: string
+  emoji?: string
+  summary?: string
+  steps?: number
+  tools_used?: string[]
+  outputs?: Array<{ tool: string; output: unknown }>
+  used_mock?: boolean
   error?: string
 }
 
@@ -390,6 +405,19 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   )
 }
 
+const SPECIALIST_LABELS: Record<string, string> = {
+  run_prospector: "🔎 Prospector",
+  run_researcher: "🧪 Researcher",
+  run_copywriter: "✍️ Copywriter",
+  run_compliance: "🛡️ Compliance",
+  run_outreach: "📤 Outreach",
+}
+
+function runningLabel(toolName: string): string {
+  const label = SPECIALIST_LABELS[toolName]
+  return label ? `${label} working…` : `Running ${toolName}…`
+}
+
 function ToolCallCard({ toolCall }: { toolCall: ToolCall }) {
   if (toolCall.state === "running") {
     return (
@@ -397,28 +425,82 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCall }) {
         <div className="absolute top-0 left-0 h-[2px] w-1/3 bg-primary animate-pulse-fast" style={{ animation: "slideRight 1.5s infinite linear" }} />
         <CardContent className="text-xs text-muted-foreground py-3 flex items-center gap-3">
           <Loader2 className="w-4 h-4 animate-spin text-primary" />
-          <span>Running <code className="font-mono text-primary bg-primary/10 px-1 py-0.5 rounded">{toolCall.toolName}</code>…</span>
+          <span>{runningLabel(toolCall.toolName)}</span>
         </CardContent>
       </Card>
     )
   }
 
-  if (toolCall.toolName === "web_search" || toolCall.toolName === "public_source_search" || toolCall.toolName === "add_named_prospects") {
-    return <WebSearchCard result={toolCall.result as WebSearchResult} />
+  if (toolCall.toolName.startsWith("run_")) {
+    return <SpecialistCard result={toolCall.result as SpecialistResult} />
   }
-  if (toolCall.toolName === "enrich_prospect") {
-    return <EnrichCard result={toolCall.result as EnrichResult} />
+  return <ToolOutputCard toolName={toolCall.toolName} result={toolCall.result} />
+}
+
+/** Renders one underlying handler's output (used directly and nested in specialist cards). */
+function ToolOutputCard({
+  toolName,
+  result,
+}: {
+  toolName: string
+  result?: ToolResult
+}) {
+  if (
+    toolName === "web_search" ||
+    toolName === "public_source_search" ||
+    toolName === "add_named_prospects"
+  ) {
+    return <WebSearchCard result={result as WebSearchResult} />
   }
-  if (toolCall.toolName === "start_bulk_job") {
-    return <BulkJobCard result={toolCall.result as BulkJobResult} />
-  }
-  if (toolCall.toolName === "launch_campaign") {
-    return <LaunchCampaignCard result={toolCall.result as LaunchCampaignResult} />
-  }
-  if (toolCall.toolName === "clarify_question") {
-    return <ClarifyCard result={toolCall.result as ClarifyResult} />
-  }
+  if (toolName === "enrich_prospect") return <EnrichCard result={result as EnrichResult} />
+  if (toolName === "start_bulk_job") return <BulkJobCard result={result as BulkJobResult} />
+  if (toolName === "launch_campaign")
+    return <LaunchCampaignCard result={result as LaunchCampaignResult} />
+  if (toolName === "clarify_question") return <ClarifyCard result={result as ClarifyResult} />
   return null
+}
+
+/** A single specialist delegation: badge + summary + its nested tool outputs. */
+function SpecialistCard({ result }: { result?: SpecialistResult }) {
+  if (!result) return null
+  if (result.error) {
+    return (
+      <Card size="sm" className="border-destructive/30 bg-destructive/5">
+        <CardContent className="py-3 text-sm text-destructive font-medium flex items-center gap-2">
+          <HelpCircle className="w-4 h-4" />
+          {result.role ?? "Specialist"} couldn’t finish: {result.error}
+        </CardContent>
+      </Card>
+    )
+  }
+  return (
+    <Card size="sm" className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors">
+      <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <span className="text-base leading-none">{result.emoji ?? "🤖"}</span>
+          {result.role ?? "Specialist"}
+          {result.used_mock && (
+            <Badge variant="secondary" className="ml-auto align-middle text-[10px]">
+              demo data
+            </Badge>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 p-4">
+        {result.summary && (
+          <div className="text-sm leading-relaxed whitespace-pre-wrap">{result.summary}</div>
+        )}
+        {result.outputs?.map((o, i) => (
+          <ToolOutputCard key={i} toolName={o.tool} result={o.output as ToolResult} />
+        ))}
+        {result.tools_used && result.tools_used.length > 0 && (
+          <div className="text-[11px] text-muted-foreground border-t border-border/50 pt-2">
+            via {result.tools_used.join(", ")}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
 }
 
 function WebSearchCard({ result }: { result: WebSearchResult }) {

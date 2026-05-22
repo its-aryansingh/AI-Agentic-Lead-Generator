@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Separate sub-projects with their own toolchains (mirror tsconfig excludes):
+    "chrome-extension/**",
+    "scraper/**",
   ]),
   // Conventional "_" prefix marks intentionally-unused args/vars.
   // The Next.js preset's no-unused-vars rule doesn't allow this by default;

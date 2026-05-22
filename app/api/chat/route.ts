@@ -19,10 +19,20 @@ import {
   type UIMessage,
 } from "ai"
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, x-session-id",
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { headers: corsHeaders })
+}
+
 import { createClient, createAdminClient } from "@/lib/supabase/server"
 import { getChatModel } from "@/lib/providers/anthropic"
-import { SYSTEM_PROMPT } from "@/lib/agent/system-prompt"
-import { makeTools } from "@/lib/agent/tools"
+import { ORCHESTRATOR_PROMPT } from "@/lib/agent/orchestrator-prompt"
+import { makeOrchestratorTools } from "@/lib/agent/orchestrator-tools"
 import { hasKey } from "@/lib/utils"
 import { maybeResetCredits } from "@/lib/credits"
 
@@ -35,14 +45,14 @@ export async function POST(req: Request) {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) {
-    return new NextResponse("Unauthorized", { status: 401 })
+    return new NextResponse("Unauthorized", { status: 401, headers: corsHeaders })
   }
 
   let body: { sessionId?: string; messages: UIMessage[] }
   try {
     body = await req.json()
   } catch {
-    return new NextResponse("Invalid JSON", { status: 400 })
+    return new NextResponse("Invalid JSON", { status: 400, headers: corsHeaders })
   }
 
   const admin = createAdminClient()
@@ -75,7 +85,7 @@ export async function POST(req: Request) {
       .eq("user_id", user.id)
       .maybeSingle()
     if (!owned) {
-      return new NextResponse("Forbidden", { status: 403 })
+      return new NextResponse("Forbidden", { status: 403, headers: corsHeaders })
     }
   } else {
     const firstUserMessage =
@@ -89,7 +99,7 @@ export async function POST(req: Request) {
       .select("id")
       .single()
     if (error || !session) {
-      return new NextResponse("Failed to create session", { status: 500 })
+      return new NextResponse("Failed to create session", { status: 500, headers: corsHeaders })
     }
     sessionId = session.id as string
   }
@@ -118,23 +128,23 @@ export async function POST(req: Request) {
 
     return new NextResponse(
       JSON.stringify({ mock: true, sessionId, assistant: canned }),
-      { headers: { "content-type": "application/json", "x-session-id": sessionId } },
+      { headers: { ...corsHeaders, "content-type": "application/json", "x-session-id": sessionId } },
     )
   }
 
   // ------------------------------------------------------------------
   // Real streaming branch.
   // ------------------------------------------------------------------
-  const tools = makeTools({ userId: user.id, sessionId })
+  const tools = makeOrchestratorTools({ userId: user.id, sessionId })
 
   const modelMessages = await convertToModelMessages(body.messages)
 
   const result = streamText({
     model: getChatModel(),
-    system: SYSTEM_PROMPT,
+    system: ORCHESTRATOR_PROMPT,
     messages: modelMessages,
     tools,
-    stopWhen: stepCountIs(5),
+    stopWhen: stepCountIs(10),
     onFinish: async ({ text, toolCalls, toolResults }) => {
       try {
         // Persist enough to replay the message on resume: the final text
@@ -167,7 +177,7 @@ export async function POST(req: Request) {
   })
 
   return result.toUIMessageStreamResponse({
-    headers: { "x-session-id": sessionId! },
+    headers: { ...corsHeaders, "x-session-id": sessionId! },
   })
 }
 

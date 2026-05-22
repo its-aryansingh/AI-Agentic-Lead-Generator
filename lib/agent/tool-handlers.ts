@@ -12,6 +12,7 @@ import { draftForProspect } from "@/lib/providers/anthropic"
 import { exportToSheet, rowsToCsv } from "@/lib/providers/google-sheets"
 import { searchGithubUsers } from "@/lib/providers/github"
 import { searchHnUsers } from "@/lib/providers/hn-algolia"
+import { searchProductHuntMakers } from "@/lib/providers/producthunt"
 import { getOrSetCache } from "@/lib/cache"
 import { bestGuessEmail, guessDomainFromCompany, verifyDomainMx } from "@/lib/email-patterns"
 import { scrapeCompany, scrapeNews } from "@/lib/providers/scraper-client"
@@ -79,18 +80,15 @@ export async function handleWebSearch(
 }
 
 // ---------------------------------------------------------------------
-// public_source_search — vertical-specific discovery.
-// GitHub is implemented; ProductHunt + HN Algolia are still stubbed.
+// public_source_search — vertical-specific discovery (GitHub, PH, HN).
 // ---------------------------------------------------------------------
 
 export async function handlePublicSourceSearch(
   params: { source: string; query: string; max_results: number },
   ctx: ToolContext,
 ) {
-  // Fan out to the right provider — both implementations return a
-  // ProspectCandidate[] so the persistence path can stay shared.
   let candidates: ProspectCandidate[] = []
-  let dbSource: "github" | "hn" | null = null
+  let dbSource: "github" | "hn" | "producthunt" | null = null
 
   if (params.source === "github") {
     dbSource = "github"
@@ -104,11 +102,17 @@ export async function handlePublicSourceSearch(
     candidates = await getOrSetCache(cacheKey, 1 * 86_400, () =>
       searchHnUsers(params.query, params.max_results),
     )
+  } else if (params.source === "producthunt") {
+    dbSource = "producthunt"
+    const cacheKey = `producthunt:${params.query}:${params.max_results}`
+    candidates = await getOrSetCache(cacheKey, 1 * 86_400, () =>
+      searchProductHuntMakers(params.query, params.max_results),
+    )
   } else {
     return {
       count: 0,
       candidates: [],
-      note: `Public-source search via ${params.source} is on the v1.5 roadmap — only "github" and "hn_algolia" are wired up right now.`,
+      note: `Unknown public source "${params.source}". Use github, producthunt, or hn_algolia.`,
     }
   }
 
@@ -143,6 +147,7 @@ export async function handlePublicSourceSearch(
         ? inserted.map((r) => ({ id: r.id, ...r.candidate }))
         : candidates.map((c) => ({ id: null, ...c })),
     source: dbSource,
+    using_mock_data: candidates.some((c) => c.source === "mock"),
   }
 }
 
@@ -348,6 +353,13 @@ export async function handleStartBulkJob(
   )
   if (candidates.length === 0) {
     return { error: "No candidates found. Run web_search first." }
+  }
+
+  // 1.2 Production Guard for Large Jobs
+  if (candidates.length > INNGEST_THRESHOLD && process.env.NODE_ENV === "production" && !process.env.INNGEST_EVENT_KEY) {
+    return { 
+      error: `Inngest is required in production for bulk jobs > ${INNGEST_THRESHOLD} prospects. INNGEST_EVENT_KEY is not configured.`
+    }
   }
 
   // 1.5 Credit gate — refuse upfront if the user doesn't have enough.
@@ -666,13 +678,16 @@ export async function handleLaunchCampaign(
 
   // 5. Seed recipients — frozen copy of the drafted content, scheduled now.
   const recipientInserts: Array<Record<string, unknown>> = []
+  const enrollmentInserts: Array<Record<string, unknown>> = []
   let skipped = 0
+  
   for (const p of sendable) {
     const emailHash = sha256Email(p.email as string)
     if (suppressedHashes.has(emailHash)) {
       skipped++
       continue
     }
+    
     recipientInserts.push({
       campaign_id: campaign.id,
       user_id: ctx.userId,
@@ -683,6 +698,15 @@ export async function handleLaunchCampaign(
       status: "scheduled",
       scheduled_for: new Date().toISOString(),
     })
+    
+    if (params.sequence_id) {
+      enrollmentInserts.push({
+        sequence_id: params.sequence_id,
+        prospect_id: p.id,
+        status: "active",
+        current_step: 0,
+      })
+    }
   }
 
   if (recipientInserts.length === 0) {
@@ -697,6 +721,10 @@ export async function handleLaunchCampaign(
   }
 
   await supabase.from("campaign_recipients").insert(recipientInserts)
+
+  if (enrollmentInserts.length > 0) {
+    await supabase.from("sequence_enrollments").insert(enrollmentInserts)
+  }
 
   return {
     campaign_id: campaign.id,
