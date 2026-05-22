@@ -57,7 +57,7 @@ export async function POST(req: Request) {
       // Match the thread to one of our sent recipients.
       const { data: recipient } = await supabase
         .from("campaign_recipients")
-        .select("id,campaign_id,email,status")
+        .select("id,campaign_id,prospect_id,email,status")
         .eq("thread_id", msg.threadId)
         .maybeSingle()
       if (!recipient) continue
@@ -71,6 +71,14 @@ export async function POST(req: Request) {
           .from("campaign_recipients")
           .update({ status: "bounced", bounce_reason: msg.snippet.slice(0, 280) })
           .eq("id", recipient.id)
+        
+        if (recipient.prospect_id) {
+          await supabase
+            .from("sequence_enrollments")
+            .update({ status: "bounced" })
+            .eq("prospect_id", recipient.prospect_id)
+            .eq("status", "active")
+        }
         await supabase.from("suppressions").upsert(
           {
             user_id: mb.user_id as string,
@@ -104,6 +112,14 @@ export async function POST(req: Request) {
         .from("campaign_recipients")
         .update({ status: "replied", reply_at: new Date().toISOString() })
         .eq("id", recipient.id)
+
+      if (recipient.prospect_id) {
+        await supabase
+          .from("sequence_enrollments")
+          .update({ status: "completed" })
+          .eq("prospect_id", recipient.prospect_id)
+          .eq("status", "active")
+      }
       await supabase.from("email_events").insert({
         recipient_id: recipient.id,
         user_id: mb.user_id as string,

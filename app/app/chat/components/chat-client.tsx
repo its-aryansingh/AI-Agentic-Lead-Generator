@@ -43,6 +43,7 @@ type ToolResult =
   | ClarifyResult
   | LaunchCampaignResult
   | SpecialistResult
+  | AutomationResult
   | Record<string, unknown>
 
 interface WebSearchResult {
@@ -101,6 +102,18 @@ interface SpecialistResult {
   tools_used?: string[]
   outputs?: Array<{ tool: string; output: unknown }>
   used_mock?: boolean
+  error?: string
+}
+
+/** Result returned by the create_automation tool. */
+interface AutomationResult {
+  automation?: {
+    id: string
+    name: string
+    schedule_frequency: string | null
+    next_run_at: string | null
+  }
+  next_run_at?: string
   error?: string
 }
 
@@ -456,6 +469,8 @@ function ToolOutputCard({
   if (toolName === "start_bulk_job") return <BulkJobCard result={result as BulkJobResult} />
   if (toolName === "launch_campaign")
     return <LaunchCampaignCard result={result as LaunchCampaignResult} />
+  if (toolName === "create_automation")
+    return <AutomationCard result={result as AutomationResult} />
   if (toolName === "clarify_question") return <ClarifyCard result={result as ClarifyResult} />
   return null
 }
@@ -498,6 +513,47 @@ function SpecialistCard({ result }: { result?: SpecialistResult }) {
             via {result.tools_used.join(", ")}
           </div>
         )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function AutomationCard({ result }: { result?: AutomationResult }) {
+  if (!result || result.error) {
+    return (
+      <Card size="sm" className="border-destructive/30 bg-destructive/5">
+        <CardContent className="py-3 text-sm text-destructive font-medium flex items-center gap-2">
+          <HelpCircle className="w-4 h-4" />
+          {result?.error ?? "Couldn’t create the automation."}
+        </CardContent>
+      </Card>
+    )
+  }
+  const next = result.next_run_at ?? result.automation?.next_run_at
+  return (
+    <Card size="sm" className="overflow-hidden border-muted-foreground/20">
+      <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <span className="text-base leading-none">⏱</span>
+          Automation created — {result.automation?.name ?? "Untitled"}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="p-4 text-sm text-muted-foreground flex flex-col gap-1">
+        <div>
+          Runs{" "}
+          <span className="text-foreground font-medium">
+            {result.automation?.schedule_frequency ?? "on schedule"}
+          </span>
+          .
+        </div>
+        {next && (
+          <div>
+            Next run: <span className="text-foreground">{new Date(next).toLocaleString()}</span>
+          </div>
+        )}
+        <a href="/app/automations" className="text-primary hover:underline mt-1 w-fit">
+          Manage automations →
+        </a>
       </CardContent>
     </Card>
   )

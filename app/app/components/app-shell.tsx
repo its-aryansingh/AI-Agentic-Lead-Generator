@@ -4,6 +4,20 @@ import * as React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 
+import {
+  MessageSquarePlus,
+  Briefcase,
+  Zap,
+  Kanban,
+  Inbox,
+  Eye,
+  BarChart3,
+  Mic,
+  Mail,
+  Settings,
+  CreditCard,
+  Repeat,
+} from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { signOut } from "../actions"
@@ -12,6 +26,54 @@ export interface SidebarSession {
   id: string
   title: string | null
 }
+
+type NavItem = {
+  href: string
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+  exactOnly?: boolean
+  className?: string
+}
+
+type NavSection = {
+  heading: string
+  items: NavItem[]
+}
+
+const NAV_SECTIONS: NavSection[] = [
+  {
+    heading: "CORE",
+    items: [
+      { href: "/app/chat", label: "+ New chat", icon: MessageSquarePlus, exactOnly: true, className: "font-medium" },
+      { href: "/app/jobs", label: "Jobs", icon: Briefcase },
+    ],
+  },
+  {
+    heading: "OUTREACH",
+    items: [
+      { href: "/app/sequences", label: "Sequences", icon: Zap },
+      { href: "/app/automations", label: "Automations", icon: Repeat },
+      { href: "/app/pipeline", label: "Pipeline", icon: Kanban },
+      { href: "/app/inbox", label: "Reply inbox", icon: Inbox },
+      { href: "/app/intent", label: "Intent", icon: Eye },
+    ],
+  },
+  {
+    heading: "INSIGHTS",
+    items: [
+      { href: "/app/analytics", label: "Analytics", icon: BarChart3 },
+    ],
+  },
+  {
+    heading: "SETTINGS",
+    items: [
+      { href: "/app/settings/voice", label: "Voice anchor", icon: Mic },
+      { href: "/app/settings/mailboxes", label: "Mailboxes", icon: Mail },
+      { href: "/app/settings/providers", label: "Providers", icon: Settings },
+      { href: "/app/settings/billing", label: "Billing & Plans", icon: CreditCard },
+    ],
+  },
+]
 
 /**
  * App shell with a mobile-drawer sidebar.
@@ -90,40 +152,27 @@ export function AppShell({
           </button>
         </div>
 
-        <nav className="px-3 py-3 flex flex-col gap-1 text-sm border-b border-border">
-          <SidebarLink href="/app/chat" pathname={pathname} onNavigate={close} className="font-medium">
-            + New chat
-          </SidebarLink>
-          <SidebarLink href="/app/jobs" pathname={pathname} onNavigate={close}>
-            Jobs
-          </SidebarLink>
-          <SidebarLink href="/app/sequences" pathname={pathname} onNavigate={close}>
-            Sequences
-          </SidebarLink>
-          <SidebarLink href="/app/pipeline" pathname={pathname} onNavigate={close}>
-            Pipeline
-          </SidebarLink>
-          <SidebarLink href="/app/inbox" pathname={pathname} onNavigate={close}>
-            Reply inbox
-          </SidebarLink>
-          <SidebarLink href="/app/intent" pathname={pathname} onNavigate={close}>
-            Intent
-          </SidebarLink>
-          <SidebarLink href="/app/analytics" pathname={pathname} onNavigate={close}>
-            Analytics
-          </SidebarLink>
-          <SidebarLink href="/app/settings/voice" pathname={pathname} onNavigate={close}>
-            Voice anchor
-          </SidebarLink>
-          <SidebarLink href="/app/settings/mailboxes" pathname={pathname} onNavigate={close}>
-            Mailboxes
-          </SidebarLink>
-          <SidebarLink href="/app/settings/providers" pathname={pathname} onNavigate={close}>
-            Providers
-          </SidebarLink>
-          <SidebarLink href="/app/settings/billing" pathname={pathname} onNavigate={close}>
-            Billing & Plans
-          </SidebarLink>
+        <nav className="px-3 py-3 flex flex-col gap-3 text-sm border-b border-border">
+          {NAV_SECTIONS.map((section) => (
+            <div key={section.heading} className="flex flex-col gap-0.5">
+              <div className="px-3 pb-1 text-[10px] uppercase tracking-widest text-muted-foreground select-none">
+                {section.heading}
+              </div>
+              {section.items.map((item) => (
+                <SidebarLink
+                  key={item.href}
+                  href={item.href}
+                  pathname={pathname}
+                  onNavigate={close}
+                  icon={item.icon}
+                  exactOnly={item.exactOnly}
+                  className={item.className}
+                >
+                  {item.label}
+                </SidebarLink>
+              ))}
+            </div>
+          ))}
         </nav>
 
         <div className="flex-1 px-3 py-3 overflow-y-auto flex flex-col gap-0.5">
@@ -174,6 +223,8 @@ function SidebarLink({
   href,
   pathname,
   onNavigate,
+  icon: Icon,
+  exactOnly,
   className,
   title,
   children,
@@ -181,22 +232,30 @@ function SidebarLink({
   href: string
   pathname: string
   onNavigate?: () => void
+  icon?: React.ComponentType<{ className?: string }>
+  exactOnly?: boolean
   className?: string
   title?: string
   children: React.ReactNode
 }) {
-  const active = pathname === href
+  const active = exactOnly
+    ? pathname === href
+    : pathname === href || pathname.startsWith(href + "/")
+
   return (
     <Link
       href={href}
       title={title}
       onClick={onNavigate}
       className={cn(
-        "px-3 py-2 rounded-md transition-colors",
-        active ? "bg-muted text-foreground" : "hover:bg-muted text-foreground",
+        "px-3 py-2 rounded-md transition-colors flex items-center gap-2",
+        active
+          ? "bg-muted text-foreground border-l-3 border-l-primary"
+          : "hover:bg-muted text-foreground",
         className,
       )}
     >
+      {Icon && <Icon className="size-4 shrink-0" />}
       {children}
     </Link>
   )

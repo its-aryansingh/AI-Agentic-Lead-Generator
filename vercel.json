@@ -11,6 +11,14 @@
     {
       "path": "/api/cron/poll-intent",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/advance-sequences",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/run-automations",
+      "schedule": "0 * * * *"
     }
   ]
 }

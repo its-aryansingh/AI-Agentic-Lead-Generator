@@ -13,6 +13,8 @@ import { z } from "zod"
 import { runSpecialist } from "./orchestrator"
 import type { SpecialistName } from "./specialists"
 import { clarifyTool, type ToolContext } from "./tools"
+import { createAutomation } from "@/lib/automations"
+import { validateAutomation } from "@/lib/automation-core"
 
 const instructionSchema = z.object({
   instruction: z
@@ -61,6 +63,45 @@ export function makeOrchestratorTools(ctx: ToolContext): ToolSet {
       ctx,
       "Delegate to the Outreach coordinator to run bulk enrichment (Sheet + CSV) or, ONLY with explicit user confirmation, queue a real email campaign. State the confirmation status in the instruction.",
     ),
+    create_automation: tool({
+      description:
+        "Create a recurring automation: the AI team runs the given instruction automatically on a schedule (hourly/daily/weekly). Use when the user wants something to happen repeatedly, e.g. 'every Monday find 20 fintech CMOs and draft outreach'. Confirm the schedule with the user before creating.",
+      inputSchema: z.object({
+        name: z.string().describe("Short name, e.g. 'Weekly fintech CMO push'."),
+        instruction: z
+          .string()
+          .describe("The full job to run each time, exactly as the user would type it into chat."),
+        frequency: z.enum(["hourly", "daily", "weekly"]),
+        hour_utc: z
+          .number()
+          .int()
+          .min(0)
+          .max(23)
+          .optional()
+          .describe("UTC hour for daily/weekly runs (default 9)."),
+        day_of_week: z
+          .number()
+          .int()
+          .min(0)
+          .max(6)
+          .optional()
+          .describe("0=Sun .. 6=Sat for weekly runs (default 1=Mon)."),
+      }),
+      execute: async (params) => {
+        const err = validateAutomation(params)
+        if (err) return { error: err }
+        return createAutomation(
+          {
+            name: params.name,
+            instruction: params.instruction,
+            frequency: params.frequency,
+            hourUtc: params.hour_utc,
+            dayOfWeek: params.day_of_week,
+          },
+          ctx.userId,
+        )
+      },
+    }),
     clarify_question: clarifyTool(ctx),
   }
 }
