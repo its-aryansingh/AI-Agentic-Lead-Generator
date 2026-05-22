@@ -58,8 +58,9 @@ export async function draftForProspect(opts: {
   prospect: ProspectCandidate
   voiceAnchor?: string | null
   news?: string | null
+  language?: string | null
 }): Promise<EnrichedDraft> {
-  const { prospect, voiceAnchor, news } = opts
+  const { prospect, voiceAnchor, news, language } = opts
 
   if (!hasAnthropicKey()) {
     return mockDraft(prospect)
@@ -74,6 +75,9 @@ export async function draftForProspect(opts: {
       prospect.location ? `Location: ${prospect.location}.` : "",
       `Search snippet: ${prospect.snippet}`,
       news ? `Recent company news: ${news}` : "",
+      language && language.toLowerCase() !== "english"
+        ? `Write the subject and email body in ${language}. Keep it natural and native — not a literal translation. Talking points may stay in English.`
+        : "",
       voiceAnchor
         ? `Match this user's writing voice. Example email they wrote:\n${voiceAnchor}`
         : "Default voice: professional, warm, direct. Not corporate.",

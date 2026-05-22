@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 async function save(formData: FormData) {
   "use server"
   const text = String(formData.get("voice") ?? "").trim()
+  const language = String(formData.get("language") ?? "English").trim() || "English"
   const supabase = await createClient()
   const {
     data: { user },
@@ -20,7 +21,7 @@ async function save(formData: FormData) {
   if (!user) redirect("/login")
   await supabase
     .from("users")
-    .update({ voice_anchor_text: text || null })
+    .update({ voice_anchor_text: text || null, outreach_language: language })
     .eq("id", user.id)
   redirect("/app/settings/voice?saved=1")
 }
@@ -38,7 +39,7 @@ export default async function VoiceSettingsPage({
 
   const { data: row } = await supabase
     .from("users")
-    .select("voice_anchor_text")
+    .select("voice_anchor_text, outreach_language")
     .eq("id", user.id)
     .maybeSingle()
 
@@ -69,6 +70,34 @@ export default async function VoiceSettingsPage({
                   rows={10}
                   placeholder="Hey [Name] —&#10;&#10;Saw your post on..."
                 />
+                <label className="flex flex-col gap-1.5 text-sm">
+                  <span className="font-medium">Outbound language</span>
+                  <select
+                    name="language"
+                    defaultValue={(row?.outreach_language as string) ?? "English"}
+                    className="w-full rounded-md border border-border bg-card px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  >
+                    {[
+                      "English",
+                      "Hindi",
+                      "Hinglish",
+                      "Tamil",
+                      "Telugu",
+                      "Bengali",
+                      "Marathi",
+                      "Kannada",
+                      "Gujarati",
+                      "Bahasa Indonesia",
+                    ].map((l) => (
+                      <option key={l} value={l}>
+                        {l}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-muted-foreground">
+                    Drafts (subject + body) are written in this language; talking points stay in English.
+                  </span>
+                </label>
                 <div className="flex items-center gap-3">
                   <Button type="submit">Save</Button>
                   {saved && (

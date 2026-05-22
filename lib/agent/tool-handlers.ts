@@ -167,7 +167,7 @@ export async function handleEnrichProspect(
   const supabase = createAdminClient()
   const { data: user } = await supabase
     .from("users")
-    .select("voice_anchor_text")
+    .select("voice_anchor_text, outreach_language")
     .eq("id", ctx.userId)
     .maybeSingle()
 
@@ -241,6 +241,7 @@ export async function handleEnrichProspect(
     prospect: candidate,
     voiceAnchor: user?.voice_anchor_text ?? null,
     news: newsSummary,
+    language: (user?.outreach_language as string | null) ?? null,
   })
 
   return {
@@ -411,11 +412,13 @@ export async function handleStartBulkJob(
   // matches their register.
   const { data: userRow } = await supabase
     .from("users")
-    .select("voice_anchor_text")
+    .select("voice_anchor_text, outreach_language")
     .eq("id", ctx.userId)
     .maybeSingle()
   const voiceAnchor =
     (userRow?.voice_anchor_text as string | null | undefined) ?? null
+  const outreachLanguage =
+    (userRow?.outreach_language as string | null | undefined) ?? null
 
   // Large batches: hand off to Inngest so the chat response doesn't block
   // waiting for 20+ LLM calls. Requires INNGEST_EVENT_KEY in env.
@@ -428,6 +431,7 @@ export async function handleStartBulkJob(
         candidates,
         draft_email: params.draft_email,
         voice_anchor: voiceAnchor,
+        outreach_language: outreachLanguage,
       },
     })
     return {
@@ -444,7 +448,7 @@ export async function handleStartBulkJob(
   // 3. Enrich each candidate in parallel (concurrency 3 = polite).
   const drafts = await mapConcurrent(candidates, 3, async (c) => {
     const draft = params.draft_email
-      ? await draftForProspect({ prospect: c, voiceAnchor })
+      ? await draftForProspect({ prospect: c, voiceAnchor, language: outreachLanguage })
       : null
 
     const domain = guessDomainFromCompany(c.company)

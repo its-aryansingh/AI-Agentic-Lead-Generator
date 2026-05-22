@@ -25,6 +25,7 @@ export type BulkEnrichEvent = {
     candidates: ProspectCandidate[]
     draft_email: boolean
     voice_anchor: string | null
+    outreach_language: string | null
   }
 }
 
@@ -36,7 +37,7 @@ export const bulkEnrichFunction = inngest.createFunction(
     retries: 2,
   },
   async ({ event, step }) => {
-    const { job_id, user_id, candidates, draft_email, voice_anchor } =
+    const { job_id, user_id, candidates, draft_email, voice_anchor, outreach_language } =
       event.data as BulkEnrichEvent["data"]
     const supabase = createAdminClient()
 
@@ -51,7 +52,11 @@ export const bulkEnrichFunction = inngest.createFunction(
     for (const candidate of candidates) {
       const result = await step.run(`enrich-${candidate.name}-${candidate.company}`, async () => {
         const draft = draft_email
-          ? await draftForProspect({ prospect: candidate, voiceAnchor: voice_anchor })
+          ? await draftForProspect({
+              prospect: candidate,
+              voiceAnchor: voice_anchor,
+              language: outreach_language,
+            })
           : null
 
         const domain = guessDomainFromCompany(candidate.company)
