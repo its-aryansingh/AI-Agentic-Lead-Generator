@@ -99,3 +99,86 @@ export async function upgradeUserPlan(
     reason: `plan_upgrade_${plan}`,
   })
 }
+
+// ---------------------------------------------------------------------
+// Razorpay Subscriptions / UPI AutoPay (recurring). Additive — the
+// one-time order path above is unchanged.
+// ---------------------------------------------------------------------
+
+/**
+ * Map a paid plan to its Razorpay subscription plan_id (created once in the
+ * Razorpay dashboard), via env. Returns null when unset → the mock path.
+ */
+export function planToRazorpayPlanId(plan: PlanType): string | null {
+  const map: Record<string, string | undefined> = {
+    starter: process.env.RAZORPAY_PLAN_STARTER,
+    pro: process.env.RAZORPAY_PLAN_PRO,
+    agency: process.env.RAZORPAY_PLAN_AGENCY,
+  }
+  return map[plan] ?? null
+}
+
+export interface SubscriptionResult {
+  subscriptionId: string
+  mock: boolean
+  error?: string
+}
+
+/**
+ * Create a Razorpay subscription (UPI AutoPay-capable) and stamp it on the
+ * user. Mock-safe: with no Razorpay keys or no configured plan_id it returns
+ * a mock id so the flow is demoable without a live account.
+ */
+export async function createRazorpaySubscription(
+  userId: string,
+  plan: PlanType,
+): Promise<SubscriptionResult> {
+  if (plan === "free" || !PLANS[plan]) {
+    return { subscriptionId: "", mock: true, error: "Invalid plan" }
+  }
+
+  const admin = createAdminClient()
+  const planId = planToRazorpayPlanId(plan)
+
+  // Mock path — no keys or no configured Razorpay plan_id.
+  if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET || !planId) {
+    const mockId = `sub_mock_${Date.now().toString(36)}`
+    await admin
+      .from("users")
+      .update({ razorpay_subscription_id: mockId, subscription_status: "created" })
+      .eq("id", userId)
+    return { subscriptionId: mockId, mock: true }
+  }
+
+  try {
+    const sub = await getRazorpay().subscriptions.create({
+      plan_id: planId,
+      total_count: 12,
+      customer_notify: 1,
+      notes: { plan, userId },
+    })
+    await admin
+      .from("users")
+      .update({ razorpay_subscription_id: sub.id, subscription_status: "created" })
+      .eq("id", userId)
+    return { subscriptionId: sub.id as string, mock: false }
+  } catch (err) {
+    return {
+      subscriptionId: "",
+      mock: false,
+      error: err instanceof Error ? err.message : "subscription failed",
+    }
+  }
+}
+
+/** Update a subscription's status from a webhook (activated/charged/halted/…). */
+export async function setSubscriptionStatus(
+  subscriptionId: string,
+  status: string,
+): Promise<void> {
+  const admin = createAdminClient()
+  await admin
+    .from("users")
+    .update({ subscription_status: status })
+    .eq("razorpay_subscription_id", subscriptionId)
+}

@@ -1,6 +1,6 @@
 "use server"
 
-import { getStripe, getRazorpay, PLANS, PlanType } from "@/lib/billing"
+import { getStripe, getRazorpay, createRazorpaySubscription, PLANS, PlanType } from "@/lib/billing"
 import { createClient } from "@/lib/supabase/server"
 import { redirect } from "next/navigation"
 
@@ -83,6 +83,29 @@ export async function createRazorpayOrder(plan: PlanType) {
     currency: order.currency,
     keyId: process.env.RAZORPAY_KEY_ID,
     userId: user.id,
+    userEmail: user.email,
+    plan,
+  }
+}
+
+export async function createRazorpaySubscriptionAction(plan: PlanType) {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) {
+    throw new Error("Unauthorized")
+  }
+  if (plan === "free") {
+    throw new Error("Cannot subscribe to free plan")
+  }
+
+  const result = await createRazorpaySubscription(user.id, plan)
+  return {
+    subscriptionId: result.subscriptionId,
+    mock: result.mock,
+    error: result.error,
+    keyId: process.env.RAZORPAY_KEY_ID,
     userEmail: user.email,
     plan,
   }

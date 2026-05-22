@@ -1,6 +1,6 @@
 import { headers } from "next/headers"
 import crypto from "crypto"
-import { upgradeUserPlan, RAZORPAY_WEBHOOK_SECRET, PlanType } from "@/lib/billing"
+import { upgradeUserPlan, setSubscriptionStatus, RAZORPAY_WEBHOOK_SECRET, PlanType } from "@/lib/billing"
 
 export async function POST(req: Request) {
   const body = await req.text()
@@ -32,6 +32,25 @@ export async function POST(req: Request) {
         // razorpay event ids look like 'evnt_xyz'
         const idempotencyKey = event.id || payment.id
         await upgradeUserPlan(userId, plan as PlanType, idempotencyKey, "razorpay")
+      }
+    } else if (event.event === "subscription.charged") {
+      // Recurring UPI AutoPay charge — grant the cycle's credits (idempotent
+      // per webhook event id) and mark the subscription active.
+      const sub = event.payload.subscription?.entity
+      const { plan, userId } = sub?.notes || {}
+      if (plan && userId) {
+        await upgradeUserPlan(userId, plan as PlanType, event.id, "razorpay")
+      }
+      if (sub?.id) await setSubscriptionStatus(sub.id, "active")
+    } else if (
+      event.event === "subscription.activated" ||
+      event.event === "subscription.halted" ||
+      event.event === "subscription.cancelled" ||
+      event.event === "subscription.completed"
+    ) {
+      const sub = event.payload.subscription?.entity
+      if (sub?.id) {
+        await setSubscriptionStatus(sub.id, sub.status ?? event.event.split(".")[1])
       }
     }
 

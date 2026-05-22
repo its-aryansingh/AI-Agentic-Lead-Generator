@@ -2,7 +2,11 @@
 
 import { useState } from "react"
 import { PLANS, PlanType } from "@/lib/billing-shared"
-import { createStripeCheckoutSession, createRazorpayOrder } from "./actions"
+import {
+  createStripeCheckoutSession,
+  createRazorpayOrder,
+  createRazorpaySubscriptionAction,
+} from "./actions"
 import Script from "next/script"
 import { Button } from "@/components/ui/button"
 import { Check, Sparkles, Loader2, IndianRupee, DollarSign } from "lucide-react"
@@ -23,12 +27,41 @@ export function BillingClient({
 }) {
   const [loadingPlan, setLoadingPlan] = useState<PlanType | null>(null)
   const [currency, setCurrency] = useState<"INR" | "USD">("USD")
+  const [recurring, setRecurring] = useState(false)
 
   const handleCheckout = async (plan: PlanType) => {
     setLoadingPlan(plan)
     try {
       if (currency === "USD") {
         await createStripeCheckoutSession(plan)
+      } else if (recurring) {
+        const sub = await createRazorpaySubscriptionAction(plan)
+        if (sub.error) {
+          alert(sub.error)
+          return
+        }
+        // Mock mode (no Razorpay keys/plan_id): no real checkout to open.
+        if (sub.mock) {
+          window.location.assign("/app/settings/billing?success=true")
+          return
+        }
+        const options = {
+          key: sub.keyId,
+          subscription_id: sub.subscriptionId,
+          name: "LeadGenAI",
+          description: `${PLANS[plan].name} — monthly (UPI AutoPay)`,
+          handler: function () {
+            window.location.href = "/app/settings/billing?success=true"
+          },
+          prefill: {
+            email: sub.userEmail,
+          },
+          theme: {
+            color: "#000000",
+          },
+        }
+        const rzp = new window.Razorpay(options)
+        rzp.open()
       } else {
         const order = await createRazorpayOrder(plan)
         const options = {
@@ -123,6 +156,18 @@ export function BillingClient({
           </div>
         </div>
 
+        {currency === "INR" && (
+          <label className="flex items-center gap-2 mb-6 text-sm text-zinc-300 select-none">
+            <input
+              type="checkbox"
+              checked={recurring}
+              onChange={(e) => setRecurring(e.target.checked)}
+              className="size-4 accent-indigo-500"
+            />
+            Auto-pay monthly via UPI (Razorpay Subscriptions) — cancel anytime
+          </label>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {plans.map((p) => {
             const isCurrent = currentPlan === p.id
@@ -187,6 +232,8 @@ export function BillingClient({
                     <Loader2 className="w-4 h-4 animate-spin" />
                   ) : isCurrent ? (
                     "Current Plan"
+                  ) : currency === "INR" && recurring ? (
+                    "Subscribe"
                   ) : (
                     "Upgrade"
                   )}
