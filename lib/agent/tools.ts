@@ -123,7 +123,7 @@ export const startBulkJobTool = (ctx: ToolContext) =>
 export const launchCampaignTool = (ctx: ToolContext) =>
   tool({
     description:
-      "Launch an outbound campaign: queue the drafted emails from a completed bulk job to send from the user's connected Gmail mailbox. Respects warm-up caps, send windows, and the suppression list. ONLY call after the user explicitly confirms they want to start sending real emails. Requires a connected mailbox (Settings → Mailboxes).",
+      "Launch an outbound campaign on EMAIL (default) or WHATSAPP. Email: queues drafted emails from a completed bulk job to send from the user's connected Gmail mailbox; respects warm-up caps, send windows, and the suppression list. WhatsApp: sends a pre-approved template to prospects who have a phone number and have not opted out — cold WhatsApp REQUIRES a template (business-initiated policy). ONLY call after the user explicitly confirms they want to start sending real messages.",
     inputSchema: z.object({
       name: z.string().describe("A name for this campaign."),
       job_id: z
@@ -135,12 +135,30 @@ export const launchCampaignTool = (ctx: ToolContext) =>
         .string()
         .uuid()
         .optional()
-        .describe("Sending mailbox. Defaults to the user's active mailbox."),
+        .describe("Sending mailbox. Defaults to the user's active mailbox. Email-only."),
       sequence_id: z
         .string()
         .uuid()
         .optional()
         .describe("Optional sequence to associate (for future multi-step sends)."),
+      channel: z
+        .enum(["email", "whatsapp"])
+        .default("email")
+        .describe(
+          "Outbound channel. 'email' (default) sends via Gmail. 'whatsapp' sends a pre-approved template via the configured BSP — required for cold WhatsApp outreach.",
+        ),
+      whatsapp_template: z
+        .string()
+        .optional()
+        .describe(
+          "Pre-approved WhatsApp template name (e.g. 'cold_outreach_v1'). REQUIRED when channel='whatsapp'. The template's {{1}}…{{N}} placeholders are filled with [first_name, company] in that order.",
+        ),
+      whatsapp_language: z
+        .string()
+        .optional()
+        .describe(
+          "Template language code (e.g. 'en', 'hi', 'en_US'). Defaults to 'en'. Used only when channel='whatsapp'.",
+        ),
     }),
     execute: async (params) => handleLaunchCampaign(params, ctx),
   })

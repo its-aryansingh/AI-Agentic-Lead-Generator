@@ -16,6 +16,11 @@ import { searchProductHuntMakers } from "@/lib/providers/producthunt"
 import { getOrSetCache } from "@/lib/cache"
 import { bestGuessEmail, guessDomainFromCompany, verifyDomainMx } from "@/lib/email-patterns"
 import { scrapeCompany, scrapeNews } from "@/lib/providers/scraper-client"
+import {
+  sendWhatsApp,
+  sendWhatsAppTemplate,
+  normalizeWhatsAppNumber,
+} from "@/lib/providers/whatsapp"
 import { checkCredits, deductCredits } from "@/lib/credits"
 import { sha256Email } from "@/lib/email-compliance"
 import { inngest } from "@/inngest/client"
@@ -596,12 +601,51 @@ export async function handleLaunchCampaign(
     job_id?: string
     mailbox_id?: string
     sequence_id?: string
+    channel?: "email" | "whatsapp"
+    whatsapp_template?: string
+    whatsapp_language?: string
   },
   ctx: ToolContext,
 ) {
   const supabase = createAdminClient()
+  const channel = params.channel ?? "email"
 
-  // 1. Resolve the sending mailbox (explicit, else the user's active one).
+  // 1. Resolve the source prospects (explicit job, else the latest job).
+  // Same for email and WhatsApp — channel only changes the field set
+  // we select and the sendability filter.
+  let jobId = params.job_id
+  if (!jobId) {
+    const { data: latest } = await supabase
+      .from("jobs")
+      .select("id")
+      .eq("user_id", ctx.userId)
+      .eq("status", "completed")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    jobId = (latest?.id as string | undefined) ?? undefined
+  }
+  if (!jobId) {
+    return { error: "No completed job to launch from. Run a bulk enrichment first." }
+  }
+
+  if (channel === "whatsapp") {
+    return launchWhatsAppCampaign(
+      {
+        name: params.name,
+        job_id: jobId,
+        sequence_id: params.sequence_id,
+        whatsapp_template: params.whatsapp_template,
+        whatsapp_language: params.whatsapp_language,
+      },
+      ctx,
+      supabase,
+    )
+  }
+
+  // ---------- EMAIL PATH (unchanged behaviour) ----------
+
+  // Resolve the sending mailbox (explicit, else the user's active one).
   let mailboxId = params.mailbox_id
   if (!mailboxId) {
     const { data: mb } = await supabase
@@ -621,23 +665,6 @@ export async function handleLaunchCampaign(
     }
   }
 
-  // 2. Resolve the source prospects (explicit job, else the latest job).
-  let jobId = params.job_id
-  if (!jobId) {
-    const { data: latest } = await supabase
-      .from("jobs")
-      .select("id")
-      .eq("user_id", ctx.userId)
-      .eq("status", "completed")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    jobId = (latest?.id as string | undefined) ?? undefined
-  }
-  if (!jobId) {
-    return { error: "No completed job to launch from. Run a bulk enrichment first." }
-  }
-
   const { data: prospectRows } = await supabase
     .from("prospects")
     .select("id,email,email_subject,email_body")
@@ -654,7 +681,7 @@ export async function handleLaunchCampaign(
     }
   }
 
-  // 3. Filter out globally-suppressed addresses up front.
+  // Filter out globally-suppressed addresses up front.
   const { data: suppressed } = await supabase
     .from("suppressions")
     .select("email_hash")
@@ -663,7 +690,7 @@ export async function handleLaunchCampaign(
     (suppressed ?? []).map((s) => s.email_hash as string),
   )
 
-  // 4. Create the campaign.
+  // Create the campaign.
   const { data: campaign, error: campErr } = await supabase
     .from("campaigns")
     .insert({
@@ -680,18 +707,18 @@ export async function handleLaunchCampaign(
     return { error: campErr?.message ?? "Failed to create campaign." }
   }
 
-  // 5. Seed recipients — frozen copy of the drafted content, scheduled now.
+  // Seed recipients — frozen copy of the drafted content, scheduled now.
   const recipientInserts: Array<Record<string, unknown>> = []
   const enrollmentInserts: Array<Record<string, unknown>> = []
   let skipped = 0
-  
+
   for (const p of sendable) {
     const emailHash = sha256Email(p.email as string)
     if (suppressedHashes.has(emailHash)) {
       skipped++
       continue
     }
-    
+
     recipientInserts.push({
       campaign_id: campaign.id,
       user_id: ctx.userId,
@@ -699,10 +726,11 @@ export async function handleLaunchCampaign(
       email: p.email,
       subject: p.email_subject,
       body: p.email_body,
+      channel: "email",
       status: "scheduled",
       scheduled_for: new Date().toISOString(),
     })
-    
+
     if (params.sequence_id) {
       enrollmentInserts.push({
         sequence_id: params.sequence_id,
@@ -732,8 +760,164 @@ export async function handleLaunchCampaign(
 
   return {
     campaign_id: campaign.id,
+    channel: "email" as const,
     scheduled: recipientInserts.length,
     suppressed_skipped: skipped,
     note: "Recipients queued. The send worker dispatches them on the next cron tick, respecting your mailbox warm-up cap and send window.",
+  }
+}
+
+// ---------------------------------------------------------------------
+// WhatsApp campaign launch — separate path because the send model is
+// different:
+//   - cold outreach REQUIRES a pre-approved template (BSP policy)
+//   - no per-account warm-up cap exposed by BSPs the way Gmail has them
+//     (rate-limiting happens at the BSP), so we send immediately and
+//     record the per-recipient result rather than scheduling
+//   - mailboxes don't apply
+//   - sendable filter is: phone present AND not opted out
+//   - the template's {{1}} {{2}} placeholders are filled with the
+//     prospect's first_name + company in that fixed order; users can
+//     design templates to match. Body/subject columns are not used.
+// ---------------------------------------------------------------------
+
+async function launchWhatsAppCampaign(
+  params: {
+    name: string
+    job_id: string
+    sequence_id?: string
+    whatsapp_template?: string
+    whatsapp_language?: string
+  },
+  ctx: ToolContext,
+  supabase: ReturnType<typeof createAdminClient>,
+) {
+  if (!params.whatsapp_template) {
+    return {
+      error:
+        "WhatsApp campaigns require a pre-approved template name. Pass whatsapp_template.",
+    }
+  }
+
+  const { data: prospectRows } = await supabase
+    .from("prospects")
+    .select(
+      "id,phone,whatsapp_opted_out,input_name,input_company",
+    )
+    .eq("job_id", params.job_id)
+
+  const reachable = (prospectRows ?? []).filter(
+    (p) =>
+      typeof p.phone === "string" &&
+      p.phone.trim().length > 0 &&
+      p.whatsapp_opted_out !== true,
+  )
+  if (reachable.length === 0) {
+    return {
+      error:
+        "No reachable prospects (each needs a phone number and must not be opted out). Capture phones during enrichment or import them via CSV.",
+    }
+  }
+
+  const { data: campaign, error: campErr } = await supabase
+    .from("campaigns")
+    .insert({
+      user_id: ctx.userId,
+      sequence_id: params.sequence_id ?? null,
+      source_job_id: params.job_id,
+      name: params.name,
+      status: "active",
+    })
+    .select("id")
+    .single()
+  if (campErr || !campaign) {
+    return { error: campErr?.message ?? "Failed to create campaign." }
+  }
+
+  const language = params.whatsapp_language ?? "en"
+  const template = params.whatsapp_template
+  let sent = 0
+  let failed = 0
+  const recipientInserts: Array<Record<string, unknown>> = []
+  let usedMock = false
+
+  for (const p of reachable) {
+    const phone = normalizeWhatsAppNumber(p.phone as string)
+    const firstName =
+      typeof p.input_name === "string"
+        ? (p.input_name.split(/\s+/)[0] ?? "")
+        : ""
+    const company =
+      typeof p.input_company === "string" ? p.input_company : ""
+    const res = await sendWhatsAppTemplate({
+      to: phone,
+      template,
+      languageCode: language,
+      params: [firstName, company],
+    })
+    if (res.mock) usedMock = true
+    const ok = !res.error
+    if (ok) sent++
+    else failed++
+
+    recipientInserts.push({
+      campaign_id: campaign.id,
+      user_id: ctx.userId,
+      prospect_id: p.id,
+      email: null,
+      subject: template,
+      body: `[whatsapp template] ${template} (${language})`,
+      channel: "whatsapp",
+      status: ok ? "sent" : "failed",
+      scheduled_for: new Date().toISOString(),
+      sent_at: ok ? new Date().toISOString() : null,
+      message_id: ok ? res.messageId : null,
+      bounce_reason: ok ? null : (res.error ?? "send_failed"),
+    })
+  }
+
+  if (recipientInserts.length > 0) {
+    await supabase.from("campaign_recipients").insert(recipientInserts)
+  }
+
+  return {
+    campaign_id: campaign.id,
+    channel: "whatsapp" as const,
+    sent,
+    failed,
+    template,
+    language,
+    using_mock_data: usedMock,
+    note: ok2Note(sent, failed),
+  }
+}
+
+function ok2Note(sent: number, failed: number): string {
+  if (sent > 0 && failed === 0) {
+    return `${sent} WhatsApp message(s) dispatched. Replies will appear in Inbox; STOP/UNSUBSCRIBE replies auto-suppress further sends.`
+  }
+  if (sent > 0 && failed > 0) {
+    return `${sent} sent, ${failed} failed (BSP rejected — check whatsapp template approval and recipient phone format).`
+  }
+  return `0 sent, ${failed} failed. Check WhatsApp template approval and that recipient phones are in international format.`
+}
+
+// ---------------------------------------------------------------------
+// send_whatsapp — single outbound WhatsApp message (India/SEA's highest-
+// response channel). Mock-safe via the provider; owned by the Outreach
+// specialist. Use for opted-in contacts/replies or a user-supplied number.
+// ---------------------------------------------------------------------
+
+export async function handleSendWhatsApp(
+  params: { to: string; message: string },
+  _ctx: ToolContext,
+) {
+  const res = await sendWhatsApp({ to: params.to, text: params.message })
+  return {
+    to: params.to,
+    sent: !res.error,
+    message_id: res.messageId,
+    using_mock_data: res.mock,
+    error: res.error,
   }
 }
