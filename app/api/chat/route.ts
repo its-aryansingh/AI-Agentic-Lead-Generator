@@ -29,7 +29,8 @@ export async function OPTIONS() {
   return new NextResponse(null, { headers: corsHeaders })
 }
 
-import { createClient, createAdminClient } from "@/lib/supabase/server"
+import { createAdminClient } from "@/lib/supabase/server"
+import { getUserFromRequest } from "@/lib/api-auth"
 import { getChatModel } from "@/lib/providers/anthropic"
 import { ORCHESTRATOR_PROMPT } from "@/lib/agent/orchestrator-prompt"
 import { makeOrchestratorTools } from "@/lib/agent/orchestrator-tools"
@@ -40,10 +41,10 @@ export const runtime = "nodejs"
 export const maxDuration = 60
 
 export async function POST(req: Request) {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  // Accept Authorization: Bearer <jwt> (Chrome extension, native callers)
+  // OR the existing Supabase cookie session (browser). Browser behaviour
+  // is unchanged because bearer is only attempted when the header exists.
+  const { user } = await getUserFromRequest(req)
   if (!user) {
     return new NextResponse("Unauthorized", { status: 401, headers: corsHeaders })
   }
