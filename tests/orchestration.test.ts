@@ -55,7 +55,15 @@ test("tool-using specialists expose the right tool subsets", () => {
   assert.deepEqual(SPECIALIST_META.outreach.toolNames, [
     "start_bulk_job",
     "launch_campaign",
+    "push_to_crm",
   ])
+})
+
+test("push_to_crm is reachable by exactly one specialist (outreach)", () => {
+  const owners = SPECIALIST_NAMES.filter((n) =>
+    SPECIALIST_META[n].toolNames.includes("push_to_crm"),
+  )
+  assert.deepEqual(owners, ["outreach"])
 })
 
 test("launch_campaign is reachable by exactly one specialist (outreach)", () => {

@@ -21,6 +21,7 @@ import {
   handleEnrichProspect,
   handleLaunchCampaign,
   handlePublicSourceSearch,
+  handlePushToCrm,
   handleStartBulkJob,
   handleWebSearch,
 } from "./tool-handlers"
@@ -163,6 +164,24 @@ export const launchCampaignTool = (ctx: ToolContext) =>
     execute: async (params) => handleLaunchCampaign(params, ctx),
   })
 
+export const pushToCrmTool = (ctx: ToolContext) =>
+  tool({
+    description:
+      "Push enriched prospects from a completed bulk job into HubSpot CRM (upsert contact by email, optionally attach the research summary + drafted email as a Note). Use AFTER a job completes — typically as the last step of a campaign so reps can pick up follow-ups in HubSpot. Mock-safe when HUBSPOT_API_KEY is not configured.",
+    inputSchema: z.object({
+      job_id: z
+        .string()
+        .uuid()
+        .optional()
+        .describe("Source job. Defaults to the most recent completed job."),
+      include_note: z
+        .boolean()
+        .default(true)
+        .describe("Attach the research summary + drafted email as a HubSpot Note on each contact."),
+    }),
+    execute: async (params) => handlePushToCrm(params, ctx),
+  })
+
 /**
  * Registry of every tool factory by name. Specialists (specialists.ts)
  * select a subset by name from their catalog entry; makeTools binds them all.
@@ -175,6 +194,7 @@ export const TOOL_FACTORIES: Record<string, (ctx: ToolContext) => ToolSet[string
   add_named_prospects: addNamedProspectsTool,
   start_bulk_job: startBulkJobTool,
   launch_campaign: launchCampaignTool,
+  push_to_crm: pushToCrmTool,
 }
 
 /**
@@ -191,5 +211,6 @@ export function makeTools(ctx: ToolContext): ToolSet {
     add_named_prospects: addNamedProspectsTool(ctx),
     start_bulk_job: startBulkJobTool(ctx),
     launch_campaign: launchCampaignTool(ctx),
+    push_to_crm: pushToCrmTool(ctx),
   }
 }

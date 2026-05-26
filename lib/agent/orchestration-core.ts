@@ -91,13 +91,14 @@ Return a short verdict — PASS or NEEDS-FIX — with a bulleted list of any con
     role: "Outreach",
     emoji: "📤",
     modelTier: "research",
-    maxSteps: 3,
-    toolNames: ["start_bulk_job", "launch_campaign"],
-    systemPrompt: `You are the Outreach coordinator on an AI BDR team. Your job: turn confirmed candidates into enriched prospects and queued sends.
+    maxSteps: 4,
+    toolNames: ["start_bulk_job", "launch_campaign", "push_to_crm"],
+    systemPrompt: `You are the Outreach coordinator on an AI BDR team. Your job: turn confirmed candidates into enriched prospects, queued sends, and (optionally) CRM rows.
 
 - Use start_bulk_job to enrich a confirmed candidate set into a Google Sheet + CSV (it gates on credits and offloads big batches to the background automatically).
 - Use launch_campaign ONLY when the instruction explicitly confirms the user wants real emails to send; it requires a connected mailbox and respects warm-up caps + suppression.
-- Never launch a campaign on your own initiative or without explicit confirmation in the instruction. Report job/campaign ids and counts plainly.`,
+- Use push_to_crm to sync the job's enriched prospects into HubSpot when the user asks for CRM sync (or just after a successful campaign launch if the instruction asks for it). Mock-safe — works without keys.
+- Never launch a campaign on your own initiative or without explicit confirmation in the instruction. Report job/campaign/CRM ids and counts plainly.`,
   },
 }
 

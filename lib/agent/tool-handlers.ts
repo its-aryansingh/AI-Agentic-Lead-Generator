@@ -21,6 +21,7 @@ import {
   sendWhatsAppTemplate,
   normalizeWhatsAppNumber,
 } from "@/lib/providers/whatsapp"
+import { pushContact, addNote } from "@/lib/providers/hubspot"
 import { checkCredits, deductCredits } from "@/lib/credits"
 import { sha256Email } from "@/lib/email-compliance"
 import { inngest } from "@/inngest/client"
@@ -920,4 +921,150 @@ export async function handleSendWhatsApp(
     using_mock_data: res.mock,
     error: res.error,
   }
+}
+
+// ---------------------------------------------------------------------
+// push_to_crm — sync a completed job's enriched prospects into HubSpot
+// (upsert contact by email + optional research-summary note). Mock-safe
+// via the provider; owned by the Outreach specialist. Skips prospects
+// without an email or with email_confidence='invalid' (no point creating
+// a dead contact). Caps at 100 per call to avoid orchestrator timeouts.
+// ---------------------------------------------------------------------
+
+const CRM_BATCH_CAP = 100
+
+export async function handlePushToCrm(
+  params: { job_id?: string; include_note?: boolean },
+  ctx: ToolContext,
+) {
+  const supabase = createAdminClient()
+
+  let jobId = params.job_id
+  if (!jobId) {
+    const { data: latest } = await supabase
+      .from("jobs")
+      .select("id")
+      .eq("user_id", ctx.userId)
+      .eq("status", "completed")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    jobId = (latest?.id as string | undefined) ?? undefined
+  }
+  if (!jobId) {
+    return { error: "No completed job to push. Run a bulk enrichment first." }
+  }
+
+  // Confirm the caller owns the job before pulling prospects (we use the
+  // admin client which bypasses RLS).
+  const { data: job } = await supabase
+    .from("jobs")
+    .select("id, user_id")
+    .eq("id", jobId)
+    .maybeSingle()
+  if (!job || job.user_id !== ctx.userId) {
+    return { error: "Job not found." }
+  }
+
+  const { data: prospects } = await supabase
+    .from("prospects")
+    .select(
+      "id, input_name, input_company, input_linkedin_url, email, email_confidence, research_summary, email_subject, email_body, company_domain",
+    )
+    .eq("job_id", jobId)
+    .neq("email", null)
+    .neq("email_confidence", "invalid")
+    .order("created_at", { ascending: true })
+    .limit(CRM_BATCH_CAP)
+
+  const rows = prospects ?? []
+  if (rows.length === 0) {
+    return {
+      job_id: jobId,
+      pushed: 0,
+      created: 0,
+      updated: 0,
+      failed: 0,
+      errors: [],
+      note: "No prospects with valid emails on this job.",
+    }
+  }
+
+  const includeNote = params.include_note !== false
+  let created = 0
+  let updated = 0
+  let failed = 0
+  let anyMock = false
+  const errors: Array<{ email: string; error: string }> = []
+
+  for (const p of rows) {
+    const email = (p.email as string | null) ?? ""
+    if (!email) {
+      failed++
+      continue
+    }
+    const [firstName, ...rest] = ((p.input_name as string | null) ?? "").trim().split(/\s+/)
+    const lastName = rest.join(" ").trim() || undefined
+
+    const contact = await pushContact({
+      email,
+      first_name: firstName || undefined,
+      last_name: lastName,
+      company: (p.input_company as string | null) ?? undefined,
+      linkedin_url: (p.input_linkedin_url as string | null) ?? undefined,
+      source_url: (p.company_domain as string | null) ?? undefined,
+    })
+    if (contact.mock) anyMock = true
+    if (!contact.ok || !contact.contact_id) {
+      failed++
+      errors.push({ email, error: contact.error ?? "push failed" })
+      continue
+    }
+    if (contact.created) created++
+    else updated++
+
+    if (includeNote) {
+      const noteBody = buildCrmNote(p)
+      if (noteBody) {
+        const noteRes = await addNote(contact.contact_id, { body: noteBody })
+        if (noteRes.mock) anyMock = true
+        if (!noteRes.ok) {
+          errors.push({ email, error: `note failed: ${noteRes.error ?? "unknown"}` })
+        }
+      }
+    }
+  }
+
+  return {
+    job_id: jobId,
+    pushed: created + updated,
+    created,
+    updated,
+    failed,
+    errors: errors.slice(0, 10),
+    using_mock_data: anyMock,
+  }
+}
+
+function buildCrmNote(p: {
+  input_name: string | null
+  input_company: string | null
+  research_summary: string | null
+  email_subject: string | null
+  email_body: string | null
+}): string {
+  const lines: string[] = []
+  lines.push(`LeadGenAI enrichment — ${p.input_name ?? "Prospect"}${p.input_company ? ` @ ${p.input_company}` : ""}`)
+  if (p.research_summary) {
+    lines.push("")
+    lines.push("Research summary:")
+    lines.push(p.research_summary)
+  }
+  if (p.email_subject || p.email_body) {
+    lines.push("")
+    lines.push("Drafted outreach:")
+    if (p.email_subject) lines.push(`Subject: ${p.email_subject}`)
+    if (p.email_body) lines.push(p.email_body)
+  }
+  return lines.join("\n").trim()
 }
