@@ -18,6 +18,7 @@ import { createAdminClient } from "@/lib/supabase/server"
 import { listRecentInbound } from "@/lib/providers/gmail"
 import { sha256Email } from "@/lib/email-compliance"
 import { classifyReply, needsHuman } from "@/lib/reply-classify"
+import { notifyPush } from "@/lib/notifications"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -141,15 +142,32 @@ export async function POST(req: Request) {
         )
       }
 
+      const isHotReply = needsHuman(classification.category)
       await supabase.from("reply_classifications").insert({
         recipient_id: recipient.id,
         user_id: mb.user_id as string,
         category: classification.category,
         confidence: classification.confidence,
         snippet: msg.snippet.slice(0, 500),
-        needs_human: needsHuman(classification.category),
+        needs_human: isHotReply,
         handled: false,
       })
+
+      // Fire a push to the user's registered devices for hot replies
+      // (interested / question / objection). Silent no-op for users
+      // with no devices; never throws into the cron path.
+      if (isHotReply) {
+        await notifyPush(mb.user_id as string, {
+          title: `New ${classification.category} reply`,
+          body: msg.snippet.slice(0, 240),
+          data: {
+            kind: "hot_reply",
+            recipient_id: recipient.id,
+            category: classification.category,
+          },
+          priority: "high",
+        })
+      }
       processed++
     }
   }

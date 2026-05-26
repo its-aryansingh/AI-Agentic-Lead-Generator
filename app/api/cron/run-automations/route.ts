@@ -19,7 +19,7 @@ import {
   startRun,
 } from "@/lib/automations"
 import { runOrchestration } from "@/lib/agent/run-orchestration"
-import { notifyWhatsApp } from "@/lib/notifications"
+import { notifyPush, notifyWhatsApp } from "@/lib/notifications"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -64,10 +64,33 @@ export async function POST(req: Request) {
       })
     }
     if (!result.error) {
+      const summary = (result.summary ?? "").slice(0, 280)
       await notifyWhatsApp(
         automation.user_id,
-        `✅ Automation "${automation.name}" finished. ${(result.summary ?? "").slice(0, 280)}`.trim(),
+        `✅ Automation "${automation.name}" finished. ${summary}`.trim(),
       )
+      await notifyPush(automation.user_id, {
+        title: `Automation finished: ${automation.name}`,
+        body: summary || "Completed.",
+        data: {
+          kind: "automation_done",
+          automation_id: automation.id,
+          run_id: runId,
+          status: "completed",
+        },
+      })
+    } else {
+      await notifyPush(automation.user_id, {
+        title: `Automation failed: ${automation.name}`,
+        body: result.error.slice(0, 240),
+        data: {
+          kind: "automation_done",
+          automation_id: automation.id,
+          run_id: runId,
+          status: "failed",
+        },
+        priority: "high",
+      })
     }
     processed++
   }
