@@ -167,7 +167,7 @@ export const launchCampaignTool = (ctx: ToolContext) =>
 export const pushToCrmTool = (ctx: ToolContext) =>
   tool({
     description:
-      "Push enriched prospects from a completed bulk job into HubSpot CRM (upsert contact by email, optionally attach the research summary + drafted email as a Note). Use AFTER a job completes — typically as the last step of a campaign so reps can pick up follow-ups in HubSpot. Mock-safe when HUBSPOT_API_KEY is not configured.",
+      "Push enriched prospects from a completed bulk job into a CRM (HubSpot or Zoho) — upsert contact by email, optionally attach the research summary + drafted email as a Note. Use AFTER a job completes — typically as the last step of a campaign so reps can pick up follow-ups in their CRM. Mock-safe when the chosen CRM's keys are not configured.",
     inputSchema: z.object({
       job_id: z
         .string()
@@ -177,7 +177,13 @@ export const pushToCrmTool = (ctx: ToolContext) =>
       include_note: z
         .boolean()
         .default(true)
-        .describe("Attach the research summary + drafted email as a HubSpot Note on each contact."),
+        .describe("Attach the research summary + drafted email as a Note on each contact."),
+      crm: z
+        .enum(["hubspot", "zoho"])
+        .default("hubspot")
+        .describe(
+          "Which CRM to push to. 'hubspot' (default) uses HUBSPOT_API_KEY; 'zoho' uses ZOHO_REFRESH_TOKEN + ZOHO_CLIENT_ID + ZOHO_CLIENT_SECRET (+ optional ZOHO_REGION, default 'com', use 'in' for India accounts).",
+        ),
     }),
     execute: async (params) => handlePushToCrm(params, ctx),
   })

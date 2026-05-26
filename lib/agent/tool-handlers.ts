@@ -22,6 +22,7 @@ import {
   normalizeWhatsAppNumber,
 } from "@/lib/providers/whatsapp"
 import { pushContact, addNote } from "@/lib/providers/hubspot"
+import { pushZohoContact, addZohoNote } from "@/lib/providers/zoho"
 import { checkCredits, deductCredits } from "@/lib/credits"
 import { sha256Email } from "@/lib/email-compliance"
 import { inngest } from "@/inngest/client"
@@ -934,9 +935,14 @@ export async function handleSendWhatsApp(
 const CRM_BATCH_CAP = 100
 
 export async function handlePushToCrm(
-  params: { job_id?: string; include_note?: boolean },
+  params: { job_id?: string; include_note?: boolean; crm?: "hubspot" | "zoho" },
   ctx: ToolContext,
 ) {
+  // Dispatch by CRM. Provider surfaces match by design so the rest of
+  // this handler is vendor-agnostic.
+  const crm = params.crm ?? "hubspot"
+  const pushFn = crm === "zoho" ? pushZohoContact : pushContact
+  const noteFn = crm === "zoho" ? addZohoNote : addNote
   const supabase = createAdminClient()
 
   let jobId = params.job_id
@@ -1006,7 +1012,7 @@ export async function handlePushToCrm(
     const [firstName, ...rest] = ((p.input_name as string | null) ?? "").trim().split(/\s+/)
     const lastName = rest.join(" ").trim() || undefined
 
-    const contact = await pushContact({
+    const contact = await pushFn({
       email,
       first_name: firstName || undefined,
       last_name: lastName,
@@ -1026,7 +1032,7 @@ export async function handlePushToCrm(
     if (includeNote) {
       const noteBody = buildCrmNote(p)
       if (noteBody) {
-        const noteRes = await addNote(contact.contact_id, { body: noteBody })
+        const noteRes = await noteFn(contact.contact_id, { body: noteBody })
         if (noteRes.mock) anyMock = true
         if (!noteRes.ok) {
           errors.push({ email, error: `note failed: ${noteRes.error ?? "unknown"}` })
@@ -1037,6 +1043,7 @@ export async function handlePushToCrm(
 
   return {
     job_id: jobId,
+    crm,
     pushed: created + updated,
     created,
     updated,
