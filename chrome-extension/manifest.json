@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "LeadGenAI Copilot",
+  "version": "1.0.0",
+  "description": "Your persistent AI workflow assistant — chat from any page, alerts for hot replies and finished automations.",
+  "action": {
+    "default_title": "LeadGenAI Copilot"
+  },
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "background": {
+    "service_worker": "src/background.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content.ts"]
+    }
+  ],
+  "permissions": [
+    "activeTab",
+    "alarms",
+    "cookies",
+    "notifications",
+    "sidePanel",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://localhost:3000/*",
+    "https://*.vercel.app/*"
+  ]
+}
