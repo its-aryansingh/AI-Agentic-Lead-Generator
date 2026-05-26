@@ -57,6 +57,10 @@ plan.md
 .claude/
 .antigravitycli/
 
+# Team coordination — private companion repo clone (see scripts/COORD_SETUP.md)
+.coord/
+.coord-url
+
 # scraper
 scraper/node_modules/
 scraper/dist/

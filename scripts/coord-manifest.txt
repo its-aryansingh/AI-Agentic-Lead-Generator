@@ -1,0 +1,15 @@
+# Files synced between the private coord repo and the working tree.
+# One path per line, relative to the repo root. Comments and blank
+# lines are ignored. Paths ending in '/' are treated as directories
+# (recursive copy).
+#
+# Source of truth: the private repo cloned at .coord/.
+# Working tree copies are gitignored (see .gitignore), so they will
+# never leak to the public repo.
+
+COORDINATION.md
+CLAUDE.md
+AGENTS.md
+plan.md
+GEMINI.md
+.githooks/
