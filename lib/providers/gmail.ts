@@ -203,15 +203,12 @@ export async function exchangeMailboxCode(
 }
 
 /**
- * The warm-up curve. A brand-new mailbox sending 50 cold emails on day
- * one lands in spam. Cap ramps over the first two weeks.
+ * The warm-up curve. Re-exports the pure helper from
+ * lib/email-warmup-core so the send-due cron's existing
+ * `warmupCap(new Date(mailbox.warmup_started_at))` call site is
+ * unchanged. The new curve uses linear interpolation between
+ * checkpoints and ramps to 300/day (Instantly/Smartlead parity) — the
+ * old stepped 10→20→35→50 curve capped too low for production sending
+ * past month one.
  */
-export function warmupCap(warmupStartedAt: Date): number {
-  const days = Math.floor(
-    (Date.now() - warmupStartedAt.getTime()) / 86_400_000,
-  )
-  if (days <= 3) return 10
-  if (days <= 7) return 20
-  if (days <= 14) return 35
-  return 50
-}
+export { dailyCapForMailbox as warmupCap } from "@/lib/email-warmup-core"

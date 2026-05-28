@@ -8,7 +8,7 @@
 
 import { createAdminClient } from "@/lib/supabase/server"
 import { discoverProspects, type ProspectCandidate } from "@/lib/providers/brave-search"
-import { draftForProspect } from "@/lib/providers/anthropic"
+import { draftForProspect, draftReplyResponse } from "@/lib/providers/anthropic"
 import { exportToSheet, rowsToCsv } from "@/lib/providers/google-sheets"
 import { searchGithubUsers } from "@/lib/providers/github"
 import { searchHnUsers } from "@/lib/providers/hn-algolia"
@@ -1074,4 +1074,97 @@ function buildCrmNote(p: {
     if (p.email_body) lines.push(p.email_body)
   }
   return lines.join("\n").trim()
+}
+
+// ---------------------------------------------------------------------
+// draft_reply — closes the reply loop. Given a reply_classification id,
+// pulls the original outbound + the reply + the prospect, drafts a
+// contextual response via Claude (mock-safe), returns it for the user
+// to review/send. Does NOT auto-send — the user always presses the
+// final button. Owned by the Outreach specialist.
+// ---------------------------------------------------------------------
+
+export async function handleDraftReply(
+  params: { reply_classification_id: string },
+  ctx: ToolContext,
+) {
+  const supabase = createAdminClient()
+
+  const { data: rc } = await supabase
+    .from("reply_classifications")
+    .select("id, recipient_id, user_id, category, snippet")
+    .eq("id", params.reply_classification_id)
+    .maybeSingle()
+  if (!rc || rc.user_id !== ctx.userId) {
+    return { error: "reply not found" }
+  }
+
+  const { data: recipient } = await supabase
+    .from("campaign_recipients")
+    .select("id, prospect_id, subject, body, campaign_id")
+    .eq("id", rc.recipient_id as string)
+    .maybeSingle()
+  if (!recipient) {
+    return { error: "original outbound not found" }
+  }
+
+  const { data: prospect } = recipient.prospect_id
+    ? await supabase
+        .from("prospects")
+        .select("input_name, input_company")
+        .eq("id", recipient.prospect_id as string)
+        .maybeSingle()
+    : { data: null }
+
+  const { data: profile } = await supabase
+    .from("users")
+    .select("voice_anchor_text, outreach_language")
+    .eq("id", ctx.userId)
+    .maybeSingle()
+
+  const wantsMeeting = detectWantsMeeting(rc.snippet as string | null)
+
+  const draft = await draftReplyResponse({
+    prospect: {
+      name: (prospect?.input_name as string | null) ?? "there",
+      title: null,
+      company: (prospect?.input_company as string | null) ?? null,
+    },
+    original_subject: (recipient.subject as string | null) ?? "",
+    original_body: (recipient.body as string | null) ?? "",
+    reply_snippet: (rc.snippet as string | null) ?? "",
+    reply_category: rc.category as
+      | "interested"
+      | "question"
+      | "objection"
+      | "out_of_office"
+      | "unsubscribe"
+      | "not_interested"
+      | "other",
+    wants_meeting: wantsMeeting,
+    voiceAnchor: (profile?.voice_anchor_text as string | null) ?? null,
+    language: (profile?.outreach_language as string | null) ?? null,
+  })
+
+  return {
+    reply_classification_id: rc.id,
+    recipient_id: recipient.id,
+    category: rc.category,
+    wants_meeting: wantsMeeting,
+    draft,
+    using_mock_data: !process.env.ANTHROPIC_API_KEY,
+  }
+}
+
+/**
+ * Lightweight booking-intent detector for the snippet alone — keyword
+ * pass, no LLM. The reply-classifier's wants_meeting field (set on
+ * insert) is the authoritative signal; this is a fallback when
+ * handleDraftReply is invoked on a pre-existing row that predates
+ * that field. Conservative regex; better to miss than to false-positive.
+ */
+function detectWantsMeeting(snippet: string | null): boolean {
+  if (!snippet) return false
+  const lower = snippet.toLowerCase()
+  return /\b(calendar|calendly|book.*meeting|schedule.*call|set.*up.*call|when.*free|what.*works|let.*chat|let.*talk|hop on.*call|jump on.*call|15.?min|20.?min|30.?min)\b/.test(lower)
 }

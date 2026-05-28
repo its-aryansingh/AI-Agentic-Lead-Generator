@@ -18,6 +18,7 @@ import { z } from "zod"
 import {
   handleAddNamedProspects,
   handleClarify,
+  handleDraftReply,
   handleEnrichProspect,
   handleLaunchCampaign,
   handlePublicSourceSearch,
@@ -188,6 +189,19 @@ export const pushToCrmTool = (ctx: ToolContext) =>
     execute: async (params) => handlePushToCrm(params, ctx),
   })
 
+export const draftReplyTool = (ctx: ToolContext) =>
+  tool({
+    description:
+      "Draft a contextual response to a hot inbound reply. Reads the reply, the original outbound, and the prospect; returns a tight subject + body + intended next_step. Does NOT send — the user always reviews + presses the final button. Use AFTER the user asks for help responding to a specific reply they're looking at in the Inbox.",
+    inputSchema: z.object({
+      reply_classification_id: z
+        .string()
+        .uuid()
+        .describe("The reply_classifications row id (from the Inbox / hot-reply alert)."),
+    }),
+    execute: async (params) => handleDraftReply(params, ctx),
+  })
+
 /**
  * Registry of every tool factory by name. Specialists (specialists.ts)
  * select a subset by name from their catalog entry; makeTools binds them all.
@@ -201,6 +215,7 @@ export const TOOL_FACTORIES: Record<string, (ctx: ToolContext) => ToolSet[string
   start_bulk_job: startBulkJobTool,
   launch_campaign: launchCampaignTool,
   push_to_crm: pushToCrmTool,
+  draft_reply: draftReplyTool,
 }
 
 /**
@@ -218,5 +233,6 @@ export function makeTools(ctx: ToolContext): ToolSet {
     start_bulk_job: startBulkJobTool(ctx),
     launch_campaign: launchCampaignTool(ctx),
     push_to_crm: pushToCrmTool(ctx),
+    draft_reply: draftReplyTool(ctx),
   }
 }
