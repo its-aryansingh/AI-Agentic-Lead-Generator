@@ -19,7 +19,7 @@ import {
   startRun,
 } from "@/lib/automations"
 import { runOrchestration } from "@/lib/agent/run-orchestration"
-import { notifyPush, notifyWhatsApp } from "@/lib/notifications"
+import { notifyPush, notifySlack, notifyWhatsApp } from "@/lib/notifications"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -79,6 +79,11 @@ export async function POST(req: Request) {
           status: "completed",
         },
       })
+      await notifySlack(automation.user_id, {
+        emoji: "✅",
+        text: `Automation *${automation.name}* finished. ${summary}`,
+        link: { url: "/app/automations", label: "View run" },
+      })
     } else {
       await notifyPush(automation.user_id, {
         title: `Automation failed: ${automation.name}`,
@@ -90,6 +95,11 @@ export async function POST(req: Request) {
           status: "failed",
         },
         priority: "high",
+      })
+      await notifySlack(automation.user_id, {
+        emoji: "🚨",
+        text: `Automation *${automation.name}* failed: ${result.error.slice(0, 240)}`,
+        link: { url: "/app/automations", label: "Investigate" },
       })
     }
     processed++

@@ -18,7 +18,7 @@ import { createAdminClient } from "@/lib/supabase/server"
 import { listRecentInbound } from "@/lib/providers/gmail"
 import { sha256Email } from "@/lib/email-compliance"
 import { classifyReply, needsHuman } from "@/lib/reply-classify"
-import { notifyPush } from "@/lib/notifications"
+import { notifyPush, notifySlack } from "@/lib/notifications"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -153,9 +153,9 @@ export async function POST(req: Request) {
         handled: false,
       })
 
-      // Fire a push to the user's registered devices for hot replies
-      // (interested / question / objection). Silent no-op for users
-      // with no devices; never throws into the cron path.
+      // Fire push + Slack to the user's registered surfaces for hot
+      // replies (interested / question / objection). Silent no-op for
+      // users with no devices / no Slack; never throws into the cron.
       if (isHotReply) {
         await notifyPush(mb.user_id as string, {
           title: `New ${classification.category} reply`,
@@ -166,6 +166,11 @@ export async function POST(req: Request) {
             category: classification.category,
           },
           priority: "high",
+        })
+        await notifySlack(mb.user_id as string, {
+          emoji: "💬",
+          text: `New *${classification.category}* reply from ${recipient.email}: "${msg.snippet.slice(0, 200)}"`,
+          link: { url: "/app/inbox", label: "Open inbox" },
         })
       }
       processed++

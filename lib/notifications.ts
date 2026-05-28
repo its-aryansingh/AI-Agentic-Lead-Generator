@@ -6,6 +6,8 @@
  * Channels:
  *  - notifyWhatsApp: users.whatsapp_number + users.notify_whatsapp gate
  *  - notifyPush:     all rows in public.push_tokens for the user
+ *                    (Expo native + Web Push subscriptions)
+ *  - notifySlack:    users.slack_webhook_url + users.notify_slack gate
  */
 
 import { createAdminClient } from "@/lib/supabase/server"
@@ -14,6 +16,8 @@ import { sendPush } from "@/lib/providers/expo-push"
 import type { PushMessage } from "@/lib/providers/expo-push-core"
 import { sendWebPush, isGoneStatus } from "@/lib/providers/web-push"
 import { parseSubscriptionJson } from "@/lib/providers/web-push-core"
+import { sendSlack } from "@/lib/providers/slack"
+import type { SlackMessage } from "@/lib/providers/slack-core"
 
 export interface NotifyResult {
   sent: boolean
@@ -36,6 +40,34 @@ export async function notifyWhatsApp(userId: string, text: string): Promise<Noti
 
     const res = await sendWhatsApp({ to: number, text })
     return { sent: !res.error, mock: res.mock }
+  } catch {
+    return { sent: false, skipped: "notify failed" }
+  }
+}
+
+/**
+ * Post a Slack message via the user's per-account Incoming Webhook.
+ * Opt-in gated (users.notify_slack + users.slack_webhook_url). Silent
+ * no-op when off. Never throws.
+ */
+export async function notifySlack(
+  userId: string,
+  message: SlackMessage,
+): Promise<NotifyResult> {
+  try {
+    const supabase = createAdminClient()
+    const { data: u } = await supabase
+      .from("users")
+      .select("slack_webhook_url, notify_slack")
+      .eq("id", userId)
+      .maybeSingle()
+
+    const url = (u?.slack_webhook_url as string | null) ?? null
+    const enabled = Boolean(u?.notify_slack)
+    if (!enabled || !url) return { sent: false, skipped: "slack off or no webhook" }
+
+    const res = await sendSlack(url, message)
+    return { sent: res.sent, mock: res.mock, skipped: res.error }
   } catch {
     return { sent: false, skipped: "notify failed" }
   }
