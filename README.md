@@ -9,7 +9,7 @@ AI BDR workforce for B2B sales teams in India and Southeast Asia.
 > and pushes contacts to your CRM. Mobile + Chrome side-panel keep
 > you in the loop.
 
-Current cut: **v0.8**. Feature-complete across every backend lane;
+Current cut: **v0.9**. Feature-complete across every backend lane;
 deploy with `pwsh scripts/deploy.ps1 all`. Product spec in
 [`docs/PRD.md`](./docs/PRD.md); architecture in
 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md); deployment in
@@ -26,11 +26,13 @@ an orchestrator that delegates to five bounded specialist sub-agents
 tool catalog and a hard step cap. Streams "team working" cards into
 the UI so the user sees who's doing what.
 
-**Eight agent tools** (`lib/agent/tools.ts`):
+**Nine agent tools** (`lib/agent/tools.ts`):
 `web_search`, `public_source_search`, `enrich_prospect`,
 `clarify_question`, `add_named_prospects`, `start_bulk_job`,
 `launch_campaign` (email or WhatsApp), `push_to_crm` (HubSpot or
-Zoho). All mock-safe when their providers are unconfigured.
+Zoho), `draft_reply` (closes the reply loop — drafts a contextual
+response to a hot inbound for the user to review before sending).
+All mock-safe when their providers are unconfigured.
 
 **Outbound channels.** Email via the user's connected Gmail (warm-up
 caps, send windows, suppression list, compliance footer) and
@@ -42,13 +44,26 @@ own initiative.
 cron, every 20m) and the WhatsApp webhook (`/api/webhooks/whatsapp`).
 A Claude Haiku classifier sorts replies into
 `interested`/`question`/`objection`/`out_of_office`/`unsubscribe`/`not_interested`/`other`
-and routes the high-signal ones into the Inbox + fires push
-notifications to mobile/extension.
+plus a separate `wants_meeting` boolean (decoupled — an objection can
+still propose a call) and routes the high-signal ones into the Inbox
++ fires WhatsApp + push + Slack alerts. The `draft_reply` agent tool
+turns the round-trip into one click: ask the agent, get back a tight
+contextual response with a discrete next-step (book / answer-objection
+/ send-info / wait / close-lost). The user always reviews and presses
+Send themselves.
 
 **Bulk async.** Batches above 20 prospects hand off to Inngest
 (`bulk-enrich.ts`) with per-prospect retry and bounded concurrency.
 Up to 20 still runs sync inside the chat response so small flows
 feel instant.
+
+**Sending hygiene.** Per-mailbox warm-up ramp (Instantly/Smartlead
+parity): day 0 = 10/day, day 7 = 50, day 30 = 200, day 60 = 300 with
+linear interpolation between checkpoints. Send windows + suppression
+list + bounce-handling + CAN-SPAM footer + DPDP-compliant unsubscribe
+all enforced in `app/api/cron/send-due/route.ts`. Pre-flight
+deliverability check at `/api/domain-check` flags SPF/DKIM/DMARC gaps
+before the first send.
 
 **Playwright scraper microservice.** Fly.io-deployable
 (`scraper/fly.toml`) — extracts emails from team/about/contact pages
@@ -94,6 +109,13 @@ cookie auth.
 configuration matrix, DB ping latency, latest migration filename,
 cron schedule snapshot, and uptime. Returns 503 when DB ping fails
 so uptime monitors flip correctly.
+
+**Notification channels (3).** Every alert event (hot reply,
+automation completion / failure) fires across all enabled channels:
+WhatsApp (BSP), push (Expo native + Web Push VAPID for the Chrome
+extension), and Slack (per-user Incoming Webhook). Each is opt-in
+and mock-safe individually; failure of one channel never breaks the
+others.
 
 **Billing.** Stripe (international) + Razorpay (India), both with
 signature verification and idempotent webhooks. Plans:
@@ -237,18 +259,20 @@ and [`scripts/COORD_SETUP.md`](./scripts/COORD_SETUP.md).
 
 ---
 
-## What's NOT in v0.8 (intentionally deferred)
+## What's NOT in v0.9 (intentionally deferred)
 
-- **Mobile RN/Expo client.** Backend (push registration + push-fire)
-  is shipped and waiting; spec in [`docs/MOBILE.md`](./docs/MOBILE.md).
+- **Mobile RN/Expo client.** Backend (push registration + push-fire +
+  draft_reply) is shipped and waiting; spec in
+  [`docs/MOBILE.md`](./docs/MOBILE.md).
 - **Live SMTP probe (port-25 verify).** Hosts block port 25; current
   email-confidence path is DNS MX + pattern guessing + scraped real
   emails. A paid-API fallback (ZeroBounce / AbstractAPI) is a future
   option.
-- **Web Push (VAPID).** The Chrome extension polls today; native
-  Web Push from a service worker is a later upgrade.
 - **CRM beyond HubSpot + Zoho.** Salesforce / Pipedrive are
-  candidates for v1.1.
+  candidates for v1.0.
+- **A/B variant testing on drafts** — measure reply-rate per variant.
+- **Multi-channel sequences** (email → WhatsApp → email cadence) —
+  v1.0 candidate.
 
 ---
 
