@@ -61,6 +61,10 @@ plan.md
 .coord/
 .coord-url
 
+# Stray test / build logs
+*.log
+test-results.log
+
 # scraper
 scraper/node_modules/
 scraper/dist/
