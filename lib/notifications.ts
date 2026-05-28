@@ -12,6 +12,8 @@ import { createAdminClient } from "@/lib/supabase/server"
 import { sendWhatsApp } from "@/lib/providers/whatsapp"
 import { sendPush } from "@/lib/providers/expo-push"
 import type { PushMessage } from "@/lib/providers/expo-push-core"
+import { sendWebPush, isGoneStatus } from "@/lib/providers/web-push"
+import { parseSubscriptionJson } from "@/lib/providers/web-push-core"
 
 export interface NotifyResult {
   sent: boolean
@@ -47,8 +49,11 @@ export interface PushNotification {
 }
 
 /**
- * Fan out a push to every device the user has registered. Silent no-op
- * when the user has no registered tokens. Never throws.
+ * Fan out a push to every device the user has registered, across all
+ * providers (Expo for native, Web Push for browsers / extension).
+ * Dead web subscriptions (404/410 GONE from the push service) are
+ * pruned from push_tokens so the next call doesn't retry them.
+ * Silent no-op when the user has no registered tokens. Never throws.
  */
 export async function notifyPush(
   userId: string,
@@ -58,30 +63,59 @@ export async function notifyPush(
     const supabase = createAdminClient()
     const { data: tokens } = await supabase
       .from("push_tokens")
-      .select("token, provider")
+      .select("id, token, provider")
       .eq("user_id", userId)
 
     if (!tokens || tokens.length === 0) {
       return { sent: false, skipped: "no devices registered" }
     }
 
-    // For v1 we only address Expo tokens; web push has a different
-    // delivery layer (VAPID) and lands when the PWA wrapper does.
+    let anySent = false
+    let anyMock = false
+    const goneIds: string[] = []
+
+    // Expo (native) — batch one sendPush call.
     const expoTokens = tokens.filter((t) => t.provider === "expo")
-    if (expoTokens.length === 0) {
-      return { sent: false, skipped: "no expo tokens" }
+    if (expoTokens.length > 0) {
+      const messages: PushMessage[] = expoTokens.map((t) => ({
+        to: t.token as string,
+        title: notification.title,
+        body: notification.body,
+        data: notification.data,
+        priority: notification.priority,
+      }))
+      const res = await sendPush(messages)
+      if (res.accepted > 0) anySent = true
+      if (res.mock) anyMock = true
     }
 
-    const messages: PushMessage[] = expoTokens.map((t) => ({
-      to: t.token as string,
-      title: notification.title,
-      body: notification.body,
-      data: notification.data,
-      priority: notification.priority,
-    }))
+    // Web Push — one fetch per subscription; the protocol doesn't
+    // support batching. Run in parallel to keep latency bounded.
+    const webTokens = tokens.filter((t) => t.provider === "web")
+    if (webTokens.length > 0) {
+      const results = await Promise.all(
+        webTokens.map(async (t) => {
+          const sub = parseSubscriptionJson(t.token as string)
+          if (!sub) return { id: t.id as string, status: 400 }
+          const res = await sendWebPush(sub, {
+            title: notification.title,
+            body: notification.body,
+            data: notification.data,
+          })
+          if (res.sent) anySent = true
+          if (res.mock) anyMock = true
+          return { id: t.id as string, status: res.status }
+        }),
+      )
+      for (const r of results) if (isGoneStatus(r.status)) goneIds.push(r.id)
+    }
 
-    const res = await sendPush(messages)
-    return { sent: res.accepted > 0, mock: res.mock }
+    // Prune dead subscriptions in one round-trip.
+    if (goneIds.length > 0) {
+      await supabase.from("push_tokens").delete().in("id", goneIds)
+    }
+
+    return { sent: anySent, mock: anyMock }
   } catch {
     return { sent: false, skipped: "notify failed" }
   }
