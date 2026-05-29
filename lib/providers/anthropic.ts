@@ -143,6 +143,10 @@ export async function draftReplyResponse(opts: {
   wants_meeting?: boolean
   voiceAnchor?: string | null
   language?: string | null
+  /** User's calendar booking URL (Calendly / Cal.com / SavvyCal). When
+   * present + wants_meeting=true, the draft pastes the real URL
+   * instead of the [calendar link] placeholder. */
+  calendar_url?: string | null
 }): Promise<ReplyDraft> {
   const {
     prospect,
@@ -153,6 +157,7 @@ export async function draftReplyResponse(opts: {
     wants_meeting,
     voiceAnchor,
     language,
+    calendar_url,
   } = opts
 
   if (!hasAnthropicKey()) {
@@ -168,6 +173,9 @@ export async function draftReplyResponse(opts: {
       `\nOriginal outbound:\nSubject: ${original_subject}\n${original_body}`,
       `\nTheir reply (snippet): ${reply_snippet}`,
       `\nClassifier category: ${reply_category}${wants_meeting ? " (wants a meeting)" : ""}`,
+      calendar_url && wants_meeting
+        ? `\nUser's booking link (paste verbatim when offering a slot): ${calendar_url}`
+        : "",
       language && language.toLowerCase() !== "english"
         ? `\nReply in ${language}. Natural register, not a literal translation.`
         : "",
@@ -213,9 +221,11 @@ function mockReplyDraft(opts: {
   original_subject: string
   reply_category: string
   wants_meeting?: boolean
+  calendar_url?: string | null
 }): ReplyDraft {
   const firstName = opts.prospect.name.split(" ")[0]
   const cat = opts.reply_category
+  const calendarLink = opts.calendar_url ? opts.calendar_url : "[calendar link]"
   if (cat === "not_interested" || cat === "unsubscribe") {
     return {
       subject: `Re: ${opts.original_subject}`,
@@ -233,15 +243,15 @@ function mockReplyDraft(opts: {
   if (cat === "objection") {
     return {
       subject: `Re: ${opts.original_subject}`,
-      body: `Fair point — happy to dig into that specifically on a quick call. Wed or Thu 3-5pm IST for 15 min? (Mock draft — set ANTHROPIC_API_KEY for real.)`,
+      body: `Fair point — happy to dig into that specifically on a quick call. Pick a slot here: ${calendarLink} or Wed/Thu 3-5pm IST works too. (Mock draft — set ANTHROPIC_API_KEY for real.)`,
       next_step: "answer_objection",
     }
   }
   // interested / question / other — default to a meeting offer.
   return {
     subject: `Re: ${opts.original_subject}`,
-    body: `Great, ${firstName} — easiest is a 15-min walkthrough. Wed or Thu 3-5pm IST? Otherwise pick a slot here: [calendar link]. (Mock draft — set ANTHROPIC_API_KEY for real.)`,
-    next_step: opts.wants_meeting ? "book_meeting" : "book_meeting",
+    body: `Great, ${firstName} — easiest is a 15-min walkthrough. Grab a slot here: ${calendarLink} (or Wed/Thu 3-5pm IST). (Mock draft — set ANTHROPIC_API_KEY for real.)`,
+    next_step: "book_meeting",
   }
 }
 

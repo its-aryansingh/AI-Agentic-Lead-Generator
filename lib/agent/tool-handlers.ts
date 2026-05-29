@@ -1118,7 +1118,7 @@ export async function handleDraftReply(
 
   const { data: profile } = await supabase
     .from("users")
-    .select("voice_anchor_text, outreach_language")
+    .select("voice_anchor_text, outreach_language, calendar_url")
     .eq("id", ctx.userId)
     .maybeSingle()
 
@@ -1144,6 +1144,7 @@ export async function handleDraftReply(
     wants_meeting: wantsMeeting,
     voiceAnchor: (profile?.voice_anchor_text as string | null) ?? null,
     language: (profile?.outreach_language as string | null) ?? null,
+    calendar_url: (profile?.calendar_url as string | null) ?? null,
   })
 
   return {
