@@ -143,6 +143,7 @@ export async function POST(req: Request) {
       }
 
       const isHotReply = needsHuman(classification.category)
+      const wantsMeeting = Boolean(classification.wants_meeting)
       await supabase.from("reply_classifications").insert({
         recipient_id: recipient.id,
         user_id: mb.user_id as string,
@@ -150,6 +151,7 @@ export async function POST(req: Request) {
         confidence: classification.confidence,
         snippet: msg.snippet.slice(0, 500),
         needs_human: isHotReply,
+        wants_meeting: wantsMeeting,
         handled: false,
       })
 
@@ -157,19 +159,21 @@ export async function POST(req: Request) {
       // replies (interested / question / objection). Silent no-op for
       // users with no devices / no Slack; never throws into the cron.
       if (isHotReply) {
+        const meetingTag = wantsMeeting ? " 📅" : ""
         await notifyPush(mb.user_id as string, {
-          title: `New ${classification.category} reply`,
+          title: `New ${classification.category} reply${meetingTag}`,
           body: msg.snippet.slice(0, 240),
           data: {
             kind: "hot_reply",
             recipient_id: recipient.id,
             category: classification.category,
+            wants_meeting: wantsMeeting,
           },
           priority: "high",
         })
         await notifySlack(mb.user_id as string, {
-          emoji: "💬",
-          text: `New *${classification.category}* reply from ${recipient.email}: "${msg.snippet.slice(0, 200)}"`,
+          emoji: wantsMeeting ? "📅" : "💬",
+          text: `New *${classification.category}* reply${wantsMeeting ? " (wants a meeting)" : ""} from ${recipient.email}: "${msg.snippet.slice(0, 200)}"`,
           link: { url: "/app/inbox", label: "Open inbox" },
         })
       }

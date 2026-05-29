@@ -58,9 +58,11 @@ export async function GET(req: Request) {
   const admin = createAdminClient()
 
   // Hot replies — needs_human=true & handled=false. Matches Inbox query.
+  // wants_meeting is plumbed through so the extension/mobile can show
+  // a "Book a meeting" CTA on rows the classifier flagged.
   const repliesQuery = admin
     .from("reply_classifications")
-    .select("id, category, snippet, created_at, recipient_id")
+    .select("id, category, snippet, created_at, recipient_id, wants_meeting")
     .eq("user_id", user.id)
     .eq("needs_human", true)
     .eq("handled", false)
@@ -101,16 +103,18 @@ export async function GET(req: Request) {
   const alerts: ExtensionAlert[] = []
 
   for (const r of replies ?? []) {
+    const wantsMeeting = Boolean(r.wants_meeting)
     alerts.push({
       kind: "hot_reply",
       id: `reply:${r.id}`,
       ts: r.created_at as string,
-      title: `New ${r.category as string} reply`,
+      title: `New ${r.category as string} reply${wantsMeeting ? " 📅" : ""}`,
       body: shortenSnippet((r.snippet as string | null) ?? ""),
       meta: {
         reply_id: r.id,
         recipient_id: r.recipient_id,
         category: r.category,
+        wants_meeting: wantsMeeting,
       },
     })
   }
