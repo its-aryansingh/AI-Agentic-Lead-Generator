@@ -21,6 +21,7 @@ import {
   makeUnsubToken,
   sha256Email,
 } from "@/lib/email-compliance"
+import { pickRotationMailbox } from "@/lib/mailbox-rotation-core"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -37,11 +38,11 @@ export async function POST(req: Request) {
   if (!authorized(req)) return new NextResponse("Forbidden", { status: 403 })
   const supabase = createAdminClient()
 
-  // Active campaigns with their mailbox.
+  // Active campaigns with their mailbox + rotation flag.
   const { data: campaigns } = await supabase
     .from("campaigns")
     .select(
-      "id,user_id,mailbox_id,daily_cap,send_window_start_hour,send_window_end_hour",
+      "id,user_id,mailbox_id,daily_cap,send_window_start_hour,send_window_end_hour,mailbox_rotation",
     )
     .eq("status", "active")
     .limit(100)
@@ -55,14 +56,47 @@ export async function POST(req: Request) {
     const endH = (c.send_window_end_hour as number) ?? 17
     if (nowHour < startH || nowHour >= endH) continue
 
-    const { data: mailbox } = await supabase
-      .from("mailboxes")
-      .select(
-        "id,email_address,oauth_refresh_token,daily_send_limit,daily_sent,last_reset_at,warmup_started_at,physical_address,status",
-      )
-      .eq("id", c.mailbox_id as string)
-      .maybeSingle()
-    if (!mailbox || mailbox.status !== "active") continue
+    // Mailbox selection. Two modes:
+    //   - Rotation OFF (default): legacy behaviour. Single mailbox by id.
+    //   - Rotation ON: fetch ALL of the user's active mailboxes; pure
+    //     selector picks the least-loaded each tick. Self-balancing,
+    //     no per-campaign cursor needed.
+    const MAILBOX_COLS =
+      "id,email_address,oauth_refresh_token,daily_send_limit,daily_sent,last_reset_at,warmup_started_at,physical_address,status"
+
+    let mailbox: Record<string, unknown> | null = null
+
+    if (c.mailbox_rotation) {
+      const { data: pool } = await supabase
+        .from("mailboxes")
+        .select(MAILBOX_COLS)
+        .eq("user_id", c.user_id as string)
+        .eq("status", "active")
+        .limit(20)
+      const rows = (pool ?? []) as Record<string, unknown>[]
+      const candidates = rows.map((m) => ({
+        id: m.id as string,
+        daily_sent: ((m.daily_sent as number) ?? 0),
+        effective_cap: Math.min(
+          warmupCap(new Date(m.warmup_started_at as string)),
+          (m.daily_send_limit as number) ?? 10,
+          (c.daily_cap as number) ?? 30,
+        ),
+        warmup_started_at_ms: Date.parse(m.warmup_started_at as string),
+      }))
+      const choice = pickRotationMailbox(candidates)
+      if (!choice) continue
+      mailbox = rows.find((m) => m.id === choice.id) ?? null
+    } else {
+      const { data: single } = await supabase
+        .from("mailboxes")
+        .select(MAILBOX_COLS)
+        .eq("id", c.mailbox_id as string)
+        .maybeSingle()
+      mailbox = (single as Record<string, unknown> | null) ?? null
+    }
+
+    if (!mailbox || (mailbox.status as string) !== "active") continue
 
     // Reset daily_sent at the start of a new UTC day.
     let dailySent = (mailbox.daily_sent as number) ?? 0
