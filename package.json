@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --test --experimental-strip-types tests/*.test.ts tests/evals/*.test.ts",
-    "db:push": "supabase db push"
+    "db:push": "supabase db push",
+    "db:bundle": "node scripts/bundle-schema.mjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.77",
@@ -41,6 +42,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
+    "supabase": "^2.115.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
