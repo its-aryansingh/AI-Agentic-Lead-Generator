@@ -65,6 +65,10 @@ plan.md
 *.log
 test-results.log
 
+# Auto-commit watcher local state (.vscode/watch-commit.ps1)
+.autocommit.log
+AUTOCOMMIT-BLOCKED.md
+
 # scraper
 scraper/node_modules/
 scraper/dist/
