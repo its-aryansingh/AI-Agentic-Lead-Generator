@@ -20,7 +20,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
-import { Globe, UserCheck, Database, Send, HelpCircle, Loader2 } from "lucide-react"
+import { Globe, UserCheck, Database, Send, HelpCircle, Loader2, Repeat } from "lucide-react"
 import { csvToProspects, type ParsedProspect } from "@/lib/csv-parse"
 
 interface ChatMessage {
@@ -489,25 +489,32 @@ function SpecialistCard({ result }: { result?: SpecialistResult }) {
     )
   }
   return (
-    <Card size="sm" className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors">
-      <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
+    <Card size="sm" className="glass-card overflow-hidden hover:shadow-[0_8px_24px_oklch(0_0_0/4%)] hover:border-primary/20 transition-all duration-300">
+      <CardHeader className="px-4 py-3 bg-muted/20 border-b border-border/50">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <span className="text-base leading-none">{result.emoji ?? "🤖"}</span>
-          {result.role ?? "Specialist"}
+          <div className="flex items-center justify-center size-6 rounded-md bg-background shadow-sm border border-border">
+            <span className="text-sm leading-none">{result.emoji ?? "🤖"}</span>
+          </div>
+          <span className="tracking-tight">{result.role ?? "Specialist"}</span>
           {result.used_mock && (
-            <Badge variant="secondary" className="ml-auto align-middle text-[10px]">
+            <Badge variant="secondary" className="ml-auto align-middle text-[10px] bg-background/50">
               demo data
             </Badge>
           )}
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-3 p-4">
-        {result.summary && (
-          <div className="text-sm leading-relaxed whitespace-pre-wrap">{result.summary}</div>
-        )}
-        {result.outputs?.map((o, i) => (
-          <ToolOutputCard key={i} toolName={o.tool} result={o.output as ToolResult} />
-        ))}
+      <CardContent className="flex flex-col gap-4 p-4 relative">
+        <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-primary/40 to-transparent" />
+        <div className="pl-2 flex flex-col gap-3">
+          {result.summary && (
+            <div className="text-sm leading-relaxed text-foreground/90 whitespace-pre-wrap">{result.summary}</div>
+          )}
+          <div className="flex flex-col gap-2">
+            {result.outputs?.map((o, i) => (
+              <ToolOutputCard key={i} toolName={o.tool} result={o.output as ToolResult} />
+            ))}
+          </div>
+        </div>
         {result.tools_used && result.tools_used.length > 0 && (
           <div className="text-[11px] text-muted-foreground border-t border-border/50 pt-2">
             via {result.tools_used.join(", ")}
@@ -531,17 +538,23 @@ function AutomationCard({ result }: { result?: AutomationResult }) {
   }
   const next = result.next_run_at ?? result.automation?.next_run_at
   return (
-    <Card size="sm" className="overflow-hidden border-muted-foreground/20">
-      <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
+    <Card size="sm" className="glass-card overflow-hidden hover:shadow-[0_8px_24px_oklch(0_0_0/4%)] hover:border-primary/20 transition-all duration-300">
+      <CardHeader className="px-4 py-3 bg-muted/20 border-b border-border/50">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <span className="text-base leading-none">⏱</span>
-          Automation created — {result.automation?.name ?? "Untitled"}
+          <div className="flex items-center justify-center size-6 rounded-md bg-primary/10 text-primary shadow-sm border border-primary/20">
+            <Repeat className="size-3.5" />
+          </div>
+          <span className="tracking-tight">Automation created</span>
+          <span className="font-normal text-muted-foreground truncate max-w-[200px]">
+            — {result.automation?.name ?? "Untitled"}
+          </span>
         </CardTitle>
       </CardHeader>
-      <CardContent className="p-4 text-sm text-muted-foreground flex flex-col gap-1">
-        <div>
+      <CardContent className="p-4 text-sm text-foreground/90 flex flex-col gap-2 relative">
+        <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-primary/40 to-transparent" />
+        <div className="pl-2">
           Runs{" "}
-          <span className="text-foreground font-medium">
+          <span className="text-foreground font-medium bg-muted/50 px-1.5 py-0.5 rounded border border-border/50">
             {result.automation?.schedule_frequency ?? "on schedule"}
           </span>
           .

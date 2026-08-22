@@ -67,8 +67,8 @@ export default async function MailboxesPage({
 
   return (
     <div className="flex-1 flex flex-col">
-      <header className="px-6 py-4 border-b border-border">
-        <h1 className="text-base font-semibold">Sending mailboxes</h1>
+      <header className="px-6 py-5 border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-10">
+        <h1 className="text-xl font-semibold tracking-tight">Sending mailboxes</h1>
       </header>
 
       <section className="flex-1 overflow-y-auto px-6 py-6">
@@ -91,11 +91,14 @@ export default async function MailboxesPage({
             </Card>
           )}
 
-          <Card size="sm">
-            <CardHeader className="px-4">
-              <CardTitle>Connect a mailbox</CardTitle>
+          <Card className="glass-card shadow-sm border-primary/10">
+            <CardHeader className="px-6 py-5 bg-muted/20 border-b border-border/50">
+              <CardTitle className="text-base font-medium flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path></svg>
+                Connect a mailbox
+              </CardTitle>
             </CardHeader>
-            <CardContent className="flex flex-col gap-3">
+            <CardContent className="p-6 flex flex-col gap-4">
               <p className="text-sm text-muted-foreground">
                 Connect a Gmail account to send sequences from. We request{" "}
                 <code className="font-mono text-xs">gmail.send</code> +{" "}
@@ -116,20 +119,24 @@ export default async function MailboxesPage({
               (m.daily_send_limit as number) ?? 10,
             )
             return (
-              <Card key={m.id as string} size="sm">
-                <CardHeader className="px-4">
-                  <CardTitle className="flex items-center gap-2">
+              <Card key={m.id as string} className="glass-card overflow-hidden">
+                <CardHeader className="px-5 py-4 border-b border-border/50 bg-muted/10">
+                  <CardTitle className="flex items-center gap-3 text-base">
+                    <div className="p-1.5 rounded-md bg-background border border-border/50 shadow-sm">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-muted-foreground"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                    </div>
                     {m.email_address as string}
                     <Badge
                       variant={
                         m.status === "active" ? "default" : "secondary"
                       }
+                      className="ml-auto"
                     >
                       {String(m.status)}
                     </Badge>
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-3 text-sm">
+                <CardContent className="flex flex-col gap-4 px-5 py-5 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Today&apos;s sends</span>
                     <span className="font-medium">

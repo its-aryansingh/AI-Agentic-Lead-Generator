@@ -79,6 +79,10 @@ const NAV_SECTIONS: NavSection[] = [
   },
 ]
 
+function getInitials(email: string) {
+  return email.substring(0, 2).toUpperCase()
+}
+
 /**
  * App shell with a mobile-drawer sidebar.
  *
@@ -202,16 +206,22 @@ export function AppShell({
           ))}
         </div>
 
-        <div className="px-3 py-4 border-t border-border flex flex-col gap-2 text-xs">
-          <span className="px-3 text-muted-foreground truncate">{email}</span>
+        <div className="p-4 border-t border-border flex items-center justify-between gap-2">
+          <div className="flex items-center gap-3 overflow-hidden">
+            <div className="size-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold shrink-0">
+              {getInitials(email)}
+            </div>
+            <span className="text-xs text-muted-foreground truncate font-medium">{email}</span>
+          </div>
           <form action={signOut}>
             <Button
               variant="ghost"
-              size="sm"
+              size="icon"
               type="submit"
-              className="w-full justify-start"
+              title="Sign out"
+              className="size-8 text-muted-foreground hover:text-foreground shrink-0"
             >
-              Sign out
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
             </Button>
           </form>
         </div>
@@ -252,15 +262,18 @@ function SidebarLink({
       title={title}
       onClick={onNavigate}
       className={cn(
-        "px-3 py-2 rounded-md transition-colors flex items-center gap-2",
+        "px-3 py-2 rounded-md transition-all flex items-center gap-2",
         active
-          ? "bg-muted text-foreground border-l-3 border-l-primary"
-          : "hover:bg-muted text-foreground",
+          ? "bg-muted/50 text-foreground sidebar-active-accent"
+          : "hover:bg-muted text-muted-foreground hover:text-foreground",
         className,
       )}
     >
-      {Icon && <Icon className="size-4 shrink-0" />}
-      {children}
+      {Icon && <Icon className={cn("size-4 shrink-0 transition-colors", active ? "text-primary" : "")} />}
+      <span className="truncate">{children}</span>
+      {(href === "/app/inbox" || href === "/app/automations") && (
+        <span className="ml-auto size-1.5 rounded-full bg-primary/80 animate-pulse-dot" />
+      )}
     </Link>
   )
 }

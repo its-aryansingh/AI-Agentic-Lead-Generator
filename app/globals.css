@@ -207,3 +207,120 @@
 .dark .kanban-drop-active {
   background: oklch(0.7 0.14 180 / 8%);
 }
+
+/* ------------------------------------------------------------------ */
+/* v0.7 — Landing Page + Premium Animations                           */
+/* ------------------------------------------------------------------ */
+
+:root {
+  --brand-violet: oklch(0.55 0.25 290);
+  --brand-teal: oklch(0.65 0.18 180);
+  --brand-indigo: oklch(0.45 0.22 270);
+  --glow-primary: 0 0 40px oklch(0.55 0.25 290 / 30%), 0 0 80px oklch(0.65 0.18 180 / 15%);
+  --glow-primary-hover: 0 0 50px oklch(0.55 0.25 290 / 45%), 0 0 100px oklch(0.65 0.18 180 / 25%);
+}
+
+@keyframes gradient-shift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-10px); }
+}
+@keyframes float-delayed {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50%      { transform: translateY(-14px) rotate(2deg); }
+}
+@keyframes text-reveal {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes typing-cursor {
+  0%, 50% { border-color: oklch(0.85 0.15 180); }
+  51%, 100% { border-color: transparent; }
+}
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: var(--glow-primary); }
+  50%      { box-shadow: var(--glow-primary-hover); }
+}
+@keyframes orbit {
+  from { transform: rotate(0deg) translateX(120px) rotate(0deg); }
+  to   { transform: rotate(360deg) translateX(120px) rotate(-360deg); }
+}
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.9); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.animate-gradient-shift {
+  background-size: 200% 200%;
+  animation: gradient-shift 8s ease infinite;
+}
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+.animate-float-delayed {
+  animation: float-delayed 7s ease-in-out infinite;
+  animation-delay: 1s;
+}
+.animate-text-reveal {
+  animation: text-reveal 0.8s ease-out both;
+}
+.animate-glow-pulse {
+  animation: glow-pulse 3s ease-in-out infinite;
+}
+.animate-scale-in {
+  animation: scale-in 0.5s ease-out both;
+}
+
+/* Landing page gradient mesh background */
+.landing-gradient-bg {
+  background:
+    radial-gradient(ellipse at 20% 50%, oklch(0.25 0.12 290 / 50%) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, oklch(0.2 0.1 180 / 40%) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 80%, oklch(0.18 0.08 230 / 30%) 0%, transparent 50%),
+    oklch(0.1 0.02 280);
+}
+
+/* Glassmorphism card — landing variant */
+.glass-card-landing {
+  background: oklch(1 0 0 / 5%);
+  backdrop-filter: blur(16px);
+  border: 1px solid oklch(1 0 0 / 10%);
+  transition: all 0.3s ease;
+}
+.glass-card-landing:hover {
+  background: oklch(1 0 0 / 8%);
+  border-color: oklch(1 0 0 / 18%);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px oklch(0 0 0 / 20%);
+}
+
+/* Brand gradient button */
+.btn-brand {
+  background: linear-gradient(135deg, var(--brand-violet), var(--brand-teal));
+  color: oklch(0.98 0 0);
+  box-shadow: var(--glow-primary);
+  transition: all 0.3s ease;
+}
+.btn-brand:hover {
+  box-shadow: var(--glow-primary-hover);
+  transform: translateY(-1px);
+}
+
+/* Sidebar active accent */
+.sidebar-active-accent {
+  position: relative;
+}
+.sidebar-active-accent::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, var(--brand-violet), var(--brand-teal));
+}

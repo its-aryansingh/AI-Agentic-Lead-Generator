@@ -70,14 +70,17 @@ export default async function AutomationsPage() {
   return (
     <div className="flex-1 overflow-y-auto px-6 py-8">
       <div className="max-w-4xl mx-auto flex flex-col gap-6">
-        <header className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-            <Repeat className="w-6 h-6 text-primary" />
+        <header className="flex flex-col gap-2 relative">
+          <div className="absolute -inset-x-4 -inset-y-4 bg-gradient-to-r from-primary/10 via-transparent to-transparent blur-2xl -z-10 rounded-full opacity-50" />
+          <h1 className="text-3xl font-semibold tracking-tight flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-primary/10 text-primary shrink-0 ring-1 ring-primary/20">
+              <Repeat className="w-6 h-6" />
+            </div>
             Automations
           </h1>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-muted-foreground max-w-2xl">
             Recurring jobs your AI team runs on a schedule. Create one from chat — just say{" "}
-            <span className="font-mono text-foreground">
+            <span className="font-mono text-foreground bg-muted/50 px-1.5 py-0.5 rounded text-xs">
               &quot;every Monday, find 20 fintech CMOs in India and draft outreach&quot;
             </span>
             .
@@ -99,43 +102,49 @@ export default async function AutomationsPage() {
               return (
                 <li
                   key={a.id}
-                  className="rounded-xl border border-border bg-card p-5 flex flex-col gap-3"
+                  className="rounded-2xl glass-card p-5 flex flex-col gap-4 relative overflow-hidden group transition-all hover:border-primary/20 hover:shadow-sm"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex flex-col gap-0.5">
-                      <span className="font-semibold">{a.name}</span>
-                      <span className="text-xs text-muted-foreground flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5" />
+                  {/* Subtle active accent line */}
+                  {a.status === "active" && (
+                    <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-gradient-to-b from-primary to-transparent" />
+                  )}
+                  
+                  <div className="flex items-start justify-between gap-3 relative z-10">
+                    <div className="flex flex-col gap-1">
+                      <span className="font-medium text-base tracking-tight">{a.name}</span>
+                      <span className="text-xs text-muted-foreground flex items-center gap-1.5 bg-muted/30 w-fit px-2 py-0.5 rounded-full border border-border/50">
+                        <Clock className="w-3 h-3" />
                         {scheduleLabel(a)}
                       </span>
                     </div>
                     <span
                       className={cn(
-                        "text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full border",
+                        "text-[10px] uppercase tracking-wider px-2.5 py-1 rounded-full border font-medium flex items-center gap-1.5",
                         a.status === "active"
-                          ? "border-primary/30 text-primary bg-primary/5"
-                          : "border-border text-muted-foreground",
+                          ? "border-primary/30 text-primary bg-primary/10 shadow-[0_0_10px_rgba(var(--primary),0.2)]"
+                          : "border-border text-muted-foreground bg-muted/50",
                       )}
                     >
+                      {a.status === "active" && <span className="size-1.5 rounded-full bg-primary animate-pulse" />}
                       {a.status}
                     </span>
                   </div>
 
-                  <p className="text-sm text-muted-foreground line-clamp-2">{a.instruction}</p>
+                  <p className="text-sm text-foreground/80 leading-relaxed max-w-3xl relative z-10">{a.instruction}</p>
 
-                  <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground border-t border-border/50 pt-3">
+                  <div className="flex flex-wrap gap-x-6 gap-y-2 text-[11px] text-muted-foreground border-t border-border/50 pt-4 relative z-10">
                     {a.next_run_at && (
-                      <span>
-                        Next run:{" "}
-                        <span className="text-foreground">
+                      <span className="flex flex-col gap-0.5">
+                        <span className="uppercase tracking-widest opacity-60 text-[9px]">Next run</span>
+                        <span className="text-foreground font-medium">
                           {new Date(a.next_run_at).toLocaleString()}
                         </span>
                       </span>
                     )}
                     {a.last_run_at && (
-                      <span>
-                        Last run:{" "}
-                        <span className="text-foreground">
+                      <span className="flex flex-col gap-0.5">
+                        <span className="uppercase tracking-widest opacity-60 text-[9px]">Last run</span>
+                        <span className="text-foreground font-medium">
                           {new Date(a.last_run_at).toLocaleString()}
                         </span>
                       </span>
