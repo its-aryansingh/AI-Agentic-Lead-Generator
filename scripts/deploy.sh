@@ -51,8 +51,65 @@ miss()  { printf '  %b✗%b %s\n' "$c_red" "$c_reset" "$1"; }
 warn()  { printf '  %b⚠%b %s\n' "$c_yellow" "$c_reset" "$1"; }
 mockd() { printf '  %b·%b %s\n' "$c_dim" "$c_reset" "$1"; }
 
-cli_exists() { command -v "$1" >/dev/null 2>&1; }
-env_set()    { local v="${!1:-}"; [[ -n "$v" ]]; }
+cli_exists() {
+  command -v "$1" >/dev/null 2>&1 && return 0
+  # CLIs installed as devDependencies (supabase) live in node_modules/.bin
+  # and are on PATH only inside npm scripts.
+  [[ -x "$repo_root/node_modules/.bin/$1" ]] && return 0
+  return 1
+}
+
+# --- env resolution ---------------------------------------------------------
+# Values live in .env.local during development and only reach the process
+# environment in CI. Reading just the shell env reported every var as missing
+# even when .env.local had it, which made pre-flight useless for answering
+# "what do I still need to obtain?".
+declare -A DOTENV=()
+_load_dotenv() {
+  local f line k v
+  for f in "$repo_root/.env.local" "$repo_root/.env"; do
+    [[ -f "$f" ]] || continue
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line="${line#"${line%%[![:space:]]*}"}"
+      [[ -z "$line" || "$line" == \#* ]] && continue
+      [[ "$line" != *=* ]] && continue
+      k="${line%%=*}"; v="${line#*=}"
+      k="$(printf '%s' "$k" | tr -d '[:space:]')"
+      v="${v%%[[:space:]]#*}"
+      v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"
+      v="${v%\"}"; v="${v#\"}"; v="${v%\'}"; v="${v#\'}"
+      [[ -n "$k" && -z "${DOTENV[$k]+x}" ]] && DOTENV[$k]="$v"
+    done < "$f"
+  done
+  return 0
+}
+
+env_value() {
+  local v="${!1:-}"
+  if [[ -n "$v" ]]; then printf '%s' "$v"; else printf '%s' "${DOTENV[$1]:-}"; fi
+}
+
+env_set() { [[ -n "$(env_value "$1")" ]]; }
+
+# Classifies a value WITHOUT printing it: missing | local | placeholder | ok.
+# "local" catches a Supabase URL pointing at the local stack and the
+# well-known `supabase-demo` signing keys that ship with `supabase start`.
+env_grade() {
+  local v payload b64
+  v="$(env_value "$1")"
+  [[ -z "$v" ]] && { printf 'missing'; return 0; }
+  if [[ "$v" == *127.0.0.1* || "$v" == *localhost* ]]; then printf 'local'; return 0; fi
+  if [[ "$v" == ey*.*.* ]]; then
+    b64="$(printf '%s' "$v" | cut -d. -f2 | tr '_-' '/+')"
+    case $(( ${#b64} % 4 )) in 2) b64="${b64}==" ;; 3) b64="${b64}=" ;; esac
+    payload="$(printf '%s' "$b64" | base64 -d 2>/dev/null || true)"
+    if [[ "$payload" == *supabase-demo* ]]; then printf 'local'; return 0; fi
+  fi
+  case "$v" in
+    "<"*|"["*|your-*|your_*|xxx*|changeme*|replace*) printf 'placeholder'; return 0 ;;
+  esac
+  printf 'ok'
+}
 
 confirm_or_abort() {
   if [[ "$yes_flag" -eq 1 ]]; then return 0; fi
@@ -78,24 +135,41 @@ run_or_dry() {
 # ----- mode implementations -------------------------------------------------
 
 invoke_preflight() {
+  _load_dotenv
   step "Pre-flight checks"
   local missing=()
   for cli in supabase flyctl git npm; do
     if cli_exists "$cli"; then ok "$cli"; else miss "$cli  — install per their docs"; missing+=("$cli"); fi
   done
 
+  local needed=()
   step "Required env vars (server-side, for production)"
   for e in NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY \
             ANTHROPIC_API_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET CRON_SECRET; do
-    if env_set "$e"; then ok "$e"; else warn "$e  — required in Vercel prod env"; fi
+    case "$(env_grade "$e")" in
+      ok)          ok "$e" ;;
+      local)       miss "$e  — set to a LOCAL/demo value; not usable in production"; needed+=("$e") ;;
+      placeholder) miss "$e  — still a placeholder"; needed+=("$e") ;;
+      *)           warn "$e  — not set anywhere"; needed+=("$e") ;;
+    esac
   done
+  if (( ${#needed[@]} > 0 )); then
+    printf '
+'
+    warn "${#needed[@]} of 7 still need a real production value:"
+    for n in "${needed[@]}"; do warn "  - $n"; done
+  fi
 
   step "Optional env vars (mock fallback if unset)"
   for e in BRAVE_SEARCH_KEY INNGEST_EVENT_KEY INNGEST_SIGNING_KEY SCRAPER_URL SCRAPER_KEY \
             WHATSAPP_API_URL WHATSAPP_API_KEY WHATSAPP_FROM \
             HUBSPOT_API_KEY ZOHO_REFRESH_TOKEN \
             RAZORPAY_KEY_ID STRIPE_SECRET_KEY; do
-    if env_set "$e"; then ok "$e (real)"; else mockd "$e (mock)"; fi
+    case "$(env_grade "$e")" in
+      ok)    ok "$e (real)" ;;
+      local) mockd "$e (local value — mock in prod)" ;;
+      *)     mockd "$e (mock)" ;;
+    esac
   done
 
   step "Repo state"

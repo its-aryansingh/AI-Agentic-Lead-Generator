@@ -45,10 +45,16 @@ POSIX:       ./scripts/deploy.sh <mode>        [flags]
 
 | CLI | Why | Install |
 |---|---|---|
-| `supabase` | `supabase db push` | `npm i -g supabase` or `brew install supabase/tap/supabase` |
-| `flyctl`   | `fly deploy` for the scraper | https://fly.io/docs/flyctl/install/ |
+| `supabase` | `supabase db push` | already a devDependency — `npm install` is enough |
+| `flyctl`   | `fly deploy` for the scraper | https://fly.io/docs/flyctl/install/ (only needed for `scraper` mode) |
 | `git`      | repo state checks | https://git-scm.com |
 | `npm`      | bundled with Node 20+ | https://nodejs.org |
+
+`pre-flight` reads `.env.local` and `.env` in addition to the process
+environment, and grades each value rather than just checking presence. A
+Supabase URL pointing at `127.0.0.1`, or one of the `supabase-demo` signing
+keys that ship with `supabase start`, is reported as **local — not usable in
+production** rather than as configured. Values are never printed.
 
 Plus, in the linked Supabase project: run `supabase login` then
 `supabase link --project-ref <ref>` once. In Fly: run `fly auth login`

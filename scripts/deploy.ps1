@@ -42,12 +42,74 @@ function Write-Step([string]$msg) {
 }
 
 function Test-CliExists([string]$name) {
-    return [bool](Get-Command $name -ErrorAction SilentlyContinue)
+    if (Get-Command $name -ErrorAction SilentlyContinue) { return $true }
+    # CLIs installed as devDependencies live in node_modules/.bin and are on
+    # PATH only inside npm scripts. supabase ships that way here.
+    foreach ($ext in @("", ".cmd", ".ps1", ".exe")) {
+        if (Test-Path (Join-Path $repoRoot "node_modules/.bin/$name$ext")) { return $true }
+    }
+    return $false
+}
+
+# --- env resolution -------------------------------------------------------
+# Values live in .env.local during development and only reach the process
+# environment in CI. Reading just [Environment]::GetEnvironmentVariable()
+# reported every var as missing even when .env.local had it, which made
+# pre-flight useless for answering "what do I still need to obtain?".
+
+$script:DotEnv = @{}
+foreach ($f in @(".env.local", ".env")) {
+    $path = Join-Path $repoRoot $f
+    if (-not (Test-Path $path)) { continue }
+    foreach ($line in Get-Content $path) {
+        $t = $line.Trim()
+        if ($t -eq "" -or $t.StartsWith("#")) { continue }
+        $i = $t.IndexOf("=")
+        if ($i -lt 1) { continue }
+        $k = $t.Substring(0, $i).Trim()
+        $v = $t.Substring($i + 1)
+        # strip trailing inline comment, then quotes
+        $v = ($v -replace '\s+#.*$', '').Trim().Trim('"').Trim("'")
+        if (-not $script:DotEnv.ContainsKey($k)) { $script:DotEnv[$k] = $v }
+    }
+}
+
+function Get-EnvValue([string]$name) {
+    $val = [Environment]::GetEnvironmentVariable($name)
+    if (-not [string]::IsNullOrWhiteSpace($val)) { return $val }
+    if ($script:DotEnv.ContainsKey($name)) { return $script:DotEnv[$name] }
+    return $null
 }
 
 function Test-EnvSet([string]$name) {
-    $val = [Environment]::GetEnvironmentVariable($name)
-    return -not [string]::IsNullOrWhiteSpace($val)
+    return -not [string]::IsNullOrWhiteSpace((Get-EnvValue $name))
+}
+
+<#
+Classifies a value as production-ready or not, WITHOUT printing it.
+Returns: "missing" | "local" | "placeholder" | "ok"
+"local" catches the two things that make this repo look configured when it
+is not: a Supabase URL pointing at the local stack, and the well-known
+`supabase-demo` signing keys that ship with `supabase start`.
+#>
+function Get-EnvGrade([string]$name) {
+    $v = Get-EnvValue $name
+    if ([string]::IsNullOrWhiteSpace($v)) { return "missing" }
+    if ($v -match '127\.0\.0\.1|localhost') { return "local" }
+    # Supabase local demo JWTs carry {"iss":"supabase-demo"} in the payload.
+    if ($v -match '^ey[A-Za-z0-9_-]+\.') {
+        $parts = $v.Split(".")
+        if ($parts.Count -ge 2) {
+            try {
+                $b64 = $parts[1].Replace("-", "+").Replace("_", "/")
+                switch ($b64.Length % 4) { 2 { $b64 += "==" } 3 { $b64 += "=" } }
+                $payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
+                if ($payload -match "supabase-demo") { return "local" }
+            } catch { }
+        }
+    }
+    if ($v -match '^(<|\[|your[-_]|xxx|changeme|replace)' ) { return "placeholder" }
+    return "ok"
 }
 
 function Confirm-OrAbort([string]$prompt) {
@@ -105,12 +167,22 @@ function Invoke-PreFlight() {
         "GOOGLE_CLIENT_SECRET",
         "CRON_SECRET"
     )
+    $needed = @()
     foreach ($e in $envChecks) {
-        if (Test-EnvSet $e) {
-            Write-Host "  ✓ $e" -ForegroundColor Green
-        } else {
-            Write-Host "  ⚠ $e  — required in Vercel prod env" -ForegroundColor Yellow
+        switch (Get-EnvGrade $e) {
+            "ok"          { Write-Host "  ✓ $e" -ForegroundColor Green }
+            "local"       { Write-Host "  ✗ $e  — set to a LOCAL/demo value; not usable in production" -ForegroundColor Red
+                            $needed += $e }
+            "placeholder" { Write-Host "  ✗ $e  — still a placeholder" -ForegroundColor Red
+                            $needed += $e }
+            default       { Write-Host "  ⚠ $e  — not set anywhere" -ForegroundColor Yellow
+                            $needed += $e }
         }
+    }
+    if ($needed.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  $($needed.Count) of $($envChecks.Count) still need a real production value:" -ForegroundColor Yellow
+        foreach ($n in $needed) { Write-Host "    - $n" -ForegroundColor Yellow }
     }
 
     Write-Step "Optional env vars (mock fallback if unset)"
@@ -129,10 +201,10 @@ function Invoke-PreFlight() {
         "STRIPE_SECRET_KEY"
     )
     foreach ($e in $optionalChecks) {
-        if (Test-EnvSet $e) {
-            Write-Host "  ✓ $e (real)" -ForegroundColor Green
-        } else {
-            Write-Host "  · $e (mock)" -ForegroundColor DarkGray
+        switch (Get-EnvGrade $e) {
+            "ok"    { Write-Host "  ✓ $e (real)" -ForegroundColor Green }
+            "local" { Write-Host "  · $e (local value — mock in prod)" -ForegroundColor DarkGray }
+            default { Write-Host "  · $e (mock)" -ForegroundColor DarkGray }
         }
     }
 
