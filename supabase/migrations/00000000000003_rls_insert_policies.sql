@@ -43,6 +43,7 @@ create policy "own prospects insert" on prospects
     )
   );
 
+drop policy if exists "own prospects update" on prospects;
 create policy "own prospects update" on prospects
   for update using (
     exists (

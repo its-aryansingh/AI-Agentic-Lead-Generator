@@ -198,40 +198,7 @@ create index if not exists email_events_recipient_idx
 create index if not exists email_events_user_idx
   on public.email_events(user_id, created_at desc);
 
--- ---------------------------------------------------------------------
--- intent_watches — keyword queries the cron polls every hour
--- sources is an array of provider slugs: hn_algolia, github
--- ---------------------------------------------------------------------
-create table if not exists public.intent_watches (
-  id         uuid primary key default gen_random_uuid(),
-  user_id    uuid not null references public.users(id) on delete cascade,
-  query      text not null,
-  sources    text[] not null default array['hn_algolia', 'github'],
-  created_at timestamptz not null default now()
-);
-create index if not exists intent_watches_user_idx
-  on public.intent_watches(user_id, created_at desc);
 
--- ---------------------------------------------------------------------
--- intent_triggers — matches surfaced by the poll-intent cron
--- dismissed = true means the user has seen and cleared it
--- ---------------------------------------------------------------------
-create table if not exists public.intent_triggers (
-  id             uuid primary key default gen_random_uuid(),
-  user_id        uuid not null references public.users(id) on delete cascade,
-  watch_id       uuid references public.intent_watches(id) on delete set null,
-  trigger_type   text not null,
-  account_name   text,
-  account_domain text,
-  payload        jsonb,
-  source_url     text,
-  occurred_at    timestamptz not null default now(),
-  dismissed      boolean not null default false,
-  created_at     timestamptz not null default now()
-);
-create index if not exists intent_triggers_user_idx
-  on public.intent_triggers(user_id, occurred_at desc)
-  where dismissed = false;
 
 -- ---------------------------------------------------------------------
 -- Row-Level Security — same pattern as 0001_init.sql.
@@ -246,8 +213,7 @@ alter table public.campaign_recipients   enable row level security;
 alter table public.reply_classifications enable row level security;
 alter table public.suppressions          enable row level security;
 alter table public.email_events          enable row level security;
-alter table public.intent_watches        enable row level security;
-alter table public.intent_triggers       enable row level security;
+
 
 -- sequences
 drop policy if exists "own sequences" on public.sequences;
@@ -304,15 +270,7 @@ drop policy if exists "own email events" on public.email_events;
 create policy "own email events" on public.email_events
   for select using (auth.uid() = user_id);
 
--- intent_watches
-drop policy if exists "own intent watches" on public.intent_watches;
-create policy "own intent watches" on public.intent_watches
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
--- intent_triggers
-drop policy if exists "own intent triggers" on public.intent_triggers;
-create policy "own intent triggers" on public.intent_triggers
-  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 -- ---------------------------------------------------------------------
 -- Helper: reset mailbox daily_sent counters (call from pg_cron or cron route)
