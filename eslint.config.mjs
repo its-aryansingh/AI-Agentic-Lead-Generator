@@ -15,6 +15,9 @@ const eslintConfig = defineConfig([
     // Separate sub-projects with their own toolchains (mirror tsconfig excludes):
     "chrome-extension/**",
     "scraper/**",
+    // Python backend — contains a .venv with Django's bundled JS files that
+    // are not TypeScript and must not be linted by the Next.js ESLint config.
+    "backend-python/**",
   ]),
   // Conventional "_" prefix marks intentionally-unused args/vars.
   // The Next.js preset's no-unused-vars rule doesn't allow this by default;
