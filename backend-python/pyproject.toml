@@ -1,0 +1,17 @@
+[project]
+name = "leadgenai-backend"
+version = "0.1.0"
+description = "Parallel Python backend for the LeadGenAI route-by-route migration."
+requires-python = ">=3.11"
+dependencies = [
+  "Django>=5.1,<5.3",
+  "django-cors-headers>=4.6,<4.8",
+  "httpx>=0.28,<0.29",
+  "python-dotenv>=1.0,<1.2",
+  "dnspython>=2.6.0,<3.0",
+  "stripe>=9.0.0,<10.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
