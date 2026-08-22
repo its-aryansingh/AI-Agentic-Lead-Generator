@@ -48,5 +48,8 @@
     "**/.next": true,
     "**/node_modules": true,
     "**/.git": true
+  },
+  "[jsonc]": {
+    "editor.defaultFormatter": "vscode.json-language-features"
   }
 }
