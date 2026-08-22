@@ -9,30 +9,35 @@ This guide details how to deploy LeadGenAI across its three core infrastructure 
 Supabase hosts the PostgreSQL database, Handles Row Level Security (RLS), and manages Google OAuth.
 
 ### 1.1 Database Migrations
-We have bundled a script to make applying migrations easier.
-Ensure you have the Supabase CLI installed, or run it via npx:
+The Supabase CLI ships as a devDependency, so `npm install` is enough —
+there is nothing separate to install.
 
 ```bash
-# Push ALL local migrations to your linked remote database, in order
+npx supabase login
+npx supabase link --project-ref <your-project-ref>
 npm run db:push
 ```
 
-**Recommended path is `npm run db:push`** — it applies every file in
-`supabase/migrations/` (`0001` → `0016`) in numeric/lexical order. The
-migrations are additive and idempotent (`create ... if not exists`), so a
-clean push is safe.
+**Recommended path is `npm run db:push`.** It applies all **18** files in
+`supabase/migrations/`, `00000000000001_schema_init.sql` →
+`00000000000019_campaign_mailbox_rotation.sql`, in version order. Every
+migration is additive and idempotent, so a clean push is safe.
 
-If you prefer the Supabase Dashboard SQL Editor, apply **all** files in
-`supabase/migrations/` in filename order, top to bottom — do not cherry-pick.
-The set currently spans `0001_init.sql` through `0016_campaign_mailbox_rotation.sql`
-and includes intent, automations, WhatsApp, DPDP, Razorpay, push tokens,
-Slack, calendar, and mailbox-rotation tables. Skipping any of them leaves
-features (automations, Slack alerts, sequences, etc.) without their tables.
+> **The 14-digit filenames are required, not cosmetic.** The Supabase CLI
+> only recognises migrations whose names begin with a 14-digit version
+> prefix. The original `0001_init.sql` style was silently skipped by
+> `db push` — files were renamed in `8e6372b` to fix exactly that. Do not
+> rename them back, and create new ones with `npx supabase migration new`.
 
-*(Note: several `0002_*` files share the prefix and `0004_sending.sql` is
-superseded by `0005_consolidate.sql`; because every migration is
-idempotent, applying them all in filename order is still correct — the
-first `create if not exists` wins and later ones no-op.)*
+If you prefer the Dashboard SQL Editor, paste
+`supabase/FULL_SCHEMA_DEPLOY.sql` — it is every migration concatenated in
+order and is safe to run more than once. Regenerate it with
+`npm run db:bundle` after adding a migration; it is generated, so do not
+edit it by hand.
+
+*(Note: `00000000000004_sequences_sending.sql.bak` is excluded on purpose.
+Its nine tables are already created by `00000000000005_sequences.sql` and
+`00000000000007_sending.sql`, and the CLI ignores non-`.sql` files.)*
 
 ### 1.2 Auth & Google Setup
 1. In the Supabase Dashboard, go to **Authentication > Providers > Google**.

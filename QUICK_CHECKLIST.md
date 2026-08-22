@@ -30,7 +30,7 @@
 - [ ] Run: `supabase login`
 - [ ] Run: `supabase link --project-ref YOUR_REF`
 - [ ] Run: `npm run db:push`
-- [ ] Verify: 16+ tables in SQL Editor
+- [ ] Verify: 24 tables in SQL Editor
 
 ### ☐ Google OAuth Enabled in Supabase
 - [ ] Authentication → Providers → Google
@@ -215,7 +215,7 @@ VERCEL_DOMAIN = https://_______________
 ## ✅ Success Checklist
 
 - [ ] All 3 Supabase keys copied
-- [ ] All 16 migrations applied
+- [ ] All 18 migrations applied
 - [ ] Google OAuth credentials created
 - [ ] Anthropic + Brave keys obtained
 - [ ] 3 random secrets generated

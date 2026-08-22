@@ -200,13 +200,16 @@ Full breakdown in [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 supabase db push        # or scripts/deploy.sh migrations
 ```
 
-12 migrations under [`supabase/migrations/`](./supabase/migrations/) covering:
-core tables (`0001_init`), sending leg (`0002_sequences_sending`),
-intent (`0003`), legacy reconcile (`0005_consolidate`), automations
-(`0006`), WhatsApp notifications (`0007`), outreach language (`0008`),
-DPDP (`0009`), Razorpay subscriptions (`0010`), WhatsApp outreach
-(`0011`), push tokens (`0012`). All idempotent + additive — never
-re-edit an applied migration in place.
+18 migrations under [`supabase/migrations/`](./supabase/migrations/),
+`00000000000001_schema_init` → `00000000000019_campaign_mailbox_rotation`,
+creating 24 tables: core chat/jobs/prospects, the sending leg, intent,
+automations, WhatsApp notifications + outreach, outreach language, DPDP,
+Razorpay subscriptions, push tokens, Slack, reply intent, calendar URL,
+and mailbox rotation.
+
+The 14-digit prefix is required by the Supabase CLI — create new
+migrations with `npx supabase migration new <name>`, never by hand. All
+idempotent + additive — never re-edit an applied migration in place.
 
 RLS on every user-data table; service-role bypasses it for trusted
 server contexts only (cron workers, webhook handlers, agent tool

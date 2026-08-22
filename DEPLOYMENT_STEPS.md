@@ -92,9 +92,9 @@ supabase link --project-ref YOUR_PROJECT_REF
 npm run db:push
 
 # ✅ Should see output like:
-# "Applying migration 0001_init..."
+# "Applying migration 00000000000001_schema_init..."
 # "Applying migration 0002_..."
-# ... (16 migrations total)
+# ... (18 migrations total)
 # "✓ All migrations applied successfully"
 ```
 
@@ -118,7 +118,7 @@ npm run db:push
    - reply_classifications
    - (+ more tables for automations, notifications, etc.)
 
-✅ **If you see 16+ tables**: migrations worked!
+✅ **If you see 24 tables**: migrations worked!
 
 ---
 
@@ -396,7 +396,7 @@ Since you've already run `npm run db:push` locally, your Supabase database **alr
 To verify:
 1. **Go to Supabase Dashboard**
 2. **Click**: SQL Editor
-3. **Verify** you see all 16+ tables (from Step 7)
+3. **Verify** you see all 24 tables (from Step 7)
 
 ✅ **Migrations are already applied!**
 
