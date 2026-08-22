@@ -222,6 +222,7 @@ LLM-in-the-loop products silently regress when prompts drift or upstream models 
 2. **LLM-as-judge** (v1.1) — Claude scores each draft for "would a real salesperson send this?" on a 1-5 scale. Weekly mean must stay > 4.0 against the golden set.
 3. **Production sampling** — random 1% of real drafts get scored post-send. Trend dashboard surfaces drift in real time.
 
+
 A prompt regression in production is the worst kind of outage — invisible until users churn. These three layers catch it before users do.
 
 ---
