@@ -22,6 +22,8 @@ interface InitialMessage {
   toolCalls?: PersistedToolCall[]
 }
 
+export const dynamic = "force-dynamic"
+
 /**
  * /app/chat/[sessionId] — resume a previous chat.
  *

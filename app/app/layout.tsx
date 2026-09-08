@@ -4,6 +4,8 @@ import { createClient } from "@/lib/supabase/server"
 
 import { AppShell, type SidebarSession } from "./components/app-shell"
 
+export const dynamic = "force-dynamic"
+
 /**
  * Shell layout for the auth-gated portion of the app.
  *

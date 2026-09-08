@@ -4,6 +4,8 @@ import { createClient } from "@/lib/supabase/server"
 import { Card, CardContent } from "@/components/ui/card"
 import { ChatClient } from "./components/chat-client"
 
+export const dynamic = "force-dynamic"
+
 /**
  * Chat page — server component that loads:
  *  - credit balance (for the header strip)
