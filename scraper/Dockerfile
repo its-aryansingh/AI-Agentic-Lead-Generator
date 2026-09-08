@@ -48,11 +48,10 @@ RUN npm run build && npm prune --omit=dev
 # --no-sandbox as root is a container-escape footgun; drop privileges.
 USER pwuser
 
-EXPOSE 8080
+EXPOSE 8080 7860
 
-# Railway health check hits /health, which the Fastify onRequest hook
-# already exempts from the x-scraper-key requirement.
+# Health check hits /health (exempt from x-scraper-key) using dynamic PORT (defaults to 8080)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 8080) + '/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "dist/server.js"]
