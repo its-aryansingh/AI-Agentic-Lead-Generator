@@ -76,3 +76,6 @@ scraper/dist/
 # supabase
 .supabase/
 .claude/settings.local.json
+
+# local backup/clone
+_repo_leadgenai/

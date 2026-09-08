@@ -18,6 +18,9 @@ const eslintConfig = defineConfig([
     // Python backend — contains a .venv with Django's bundled JS files that
     // are not TypeScript and must not be linted by the Next.js ESLint config.
     "backend-python/**",
+    // Documentation and local clone/backup directories
+    "docs/**",
+    "_repo_leadgenai/**",
   ]),
   // Conventional "_" prefix marks intentionally-unused args/vars.
   // The Next.js preset's no-unused-vars rule doesn't allow this by default;

@@ -17,12 +17,21 @@ const nextConfig: NextConfig = {
   ...(PYTHON_BACKEND_URL
     ? {
         async rewrites() {
-          return [
-            {
-              source: "/api/:path*",
-              destination: `${PYTHON_BACKEND_URL}/api/:path*`,
-            },
-          ]
+          // `fallback` (not a bare array) is load-bearing: a plain array
+          // proxies EVERY /api/* path to Django, which silently hides any
+          // route that lives in app/api/ — including /api/inngest and
+          // /api/prospects/[id]/enrich. With `fallback`, Next.js routes
+          // that exist win, and only unmatched paths reach the backend.
+          return {
+            beforeFiles: [],
+            afterFiles: [],
+            fallback: [
+              {
+                source: "/api/:path*",
+                destination: `${PYTHON_BACKEND_URL}/api/:path*`,
+              },
+            ],
+          }
         },
       }
     : {}),

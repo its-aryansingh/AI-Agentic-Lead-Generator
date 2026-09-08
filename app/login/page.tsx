@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
@@ -11,11 +11,6 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
   const [error, setError] = useState('')
-  const [emailFocused, setEmailFocused] = useState(false)
-  const [passFocused, setPassFocused] = useState(false)
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => { setMounted(true) }, [])
 
   async function signInWithGoogle() {
     setGoogleLoading(true)
@@ -432,7 +427,7 @@ export default function LoginPage() {
         <div className="grid-overlay" />
 
         {/* Card */}
-        <div className="login-card" style={{ opacity: mounted ? 1 : 0 }}>
+        <div className="login-card">
           {/* Logo badge */}
           <div className="logo-badge">
             <span className="logo-dot" />
@@ -483,8 +478,6 @@ export default function LoginPage() {
               placeholder="you@company.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              onFocus={() => setEmailFocused(true)}
-              onBlur={() => setEmailFocused(false)}
               autoComplete="email"
               disabled={loading || googleLoading}
             />
@@ -500,8 +493,6 @@ export default function LoginPage() {
               placeholder="Min. 6 characters"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              onFocus={() => setPassFocused(true)}
-              onBlur={() => setPassFocused(false)}
               onKeyDown={(e) => e.key === 'Enter' && isFormReady && !loading && signInWithEmail()}
               autoComplete="current-password"
               disabled={loading || googleLoading}
