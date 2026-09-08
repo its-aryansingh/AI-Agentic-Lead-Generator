@@ -24,10 +24,12 @@ export const dynamic = "force-dynamic"
 const SERVICE_VERSION = "0.8.0"
 const START_TIME = Date.now()
 
-export async function GET() {
+export async function GET(req: Request) {
+  const url = new URL(req.url)
+  const strict = url.searchParams.get("strict") === "1"
   const providers = getProviderMatrix(process.env as Record<string, string | undefined>)
 
-  const db = await pingSupabase()
+  const db = await pingDb()
   const schemaVersion = readSchemaVersion()
   const crons = readCronSchedule()
 
@@ -43,14 +45,43 @@ export async function GET() {
     crons,
   }
 
-  return NextResponse.json(summary, {
-    status: summary.ok ? 200 : 503,
-  })
+  // Strict mode: gates on full database readiness (503 if DB is failing).
+  // Default mode: returns 200 for platform liveness check (Railway, Docker), reporting status in JSON.
+  const status = strict && !summary.ok ? 503 : 200
+
+  return NextResponse.json(summary, { status })
+}
+
+async function pingDb(): Promise<HealthSummary["db"]> {
+  // 1. If Railway Postgres (DATABASE_URL) is present, probe it
+  if (process.env.DATABASE_URL) {
+    try {
+      const { pingDatabase } = await import("@/lib/db")
+      const res = await pingDatabase()
+      return {
+        ok: res.ok,
+        latency_ms: res.latencyMs,
+        error: res.error,
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        latency_ms: null,
+        error: (err as Error).message,
+      }
+    }
+  }
+
+  // 2. If Supabase is present, probe Supabase
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    return pingSupabase()
+  }
+
+  // 3. Neither configured: running in mock mode (development / fresh deployment)
+  return { ok: true, latency_ms: null }
 }
 
 async function pingSupabase(): Promise<HealthSummary["db"]> {
-  // Only attempt if the URL is present — otherwise we'd spend a network
-  // round trip on a guaranteed failure for fresh dev installs.
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
     return { ok: false, latency_ms: null, error: "SUPABASE_URL unset" }
   }
