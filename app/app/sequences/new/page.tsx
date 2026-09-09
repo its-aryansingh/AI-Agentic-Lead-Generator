@@ -8,6 +8,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Mail, Check, ArrowLeft } from "lucide-react"
 
+export const dynamic = "force-dynamic"
+
 async function createSequence(formData: FormData) {
   "use server"
   const supabase = await createClient()

@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 import { JobDetailActions, ProspectActions } from "./components/actions"
 
+export const dynamic = "force-dynamic"
+
 /**
  * /app/jobs/[id] — inline view of every prospect in a bulk job.
  *

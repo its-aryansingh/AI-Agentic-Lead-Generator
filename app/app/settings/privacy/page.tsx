@@ -5,6 +5,8 @@ import { eraseContact } from "@/lib/dpdp"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
+export const dynamic = "force-dynamic"
+
 /**
  * Privacy & DPDP — right-to-erasure self-service. Enter a contact's email
  * to delete their stored data and suppress future contact, with an audit

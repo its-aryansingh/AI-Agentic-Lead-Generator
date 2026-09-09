@@ -5,6 +5,8 @@ function getMonthAgoIso(): string {
   return new Date(Date.now() - 30 * 86_400_000).toISOString()
 }
 
+export const dynamic = "force-dynamic"
+
 /**
  * /app/analytics — read-only metrics dashboard.
  *

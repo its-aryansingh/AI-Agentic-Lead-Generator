@@ -4,6 +4,8 @@ import { createClient } from "@/lib/supabase/server"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
+export const dynamic = "force-dynamic"
+
 /**
  * WhatsApp alert preferences. India/SEA users get pinged on WhatsApp when
  * an automation finishes or a hot reply lands — if they opt in here.

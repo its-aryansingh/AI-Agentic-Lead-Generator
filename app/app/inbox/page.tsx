@@ -10,6 +10,8 @@ import { InboxClient, type Reply } from "./inbox-client"
 
 
 
+export const dynamic = "force-dynamic"
+
 export default async function InboxPage() {
   const supabase = await createClient()
 

@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ArrowLeft, Mail, LinkIcon, Phone, Play, Pause, ChevronRight } from "lucide-react"
 
+export const dynamic = "force-dynamic"
+
 /**
  * /app/sequences/[id] — view sequence config and enrollment stats.
  */

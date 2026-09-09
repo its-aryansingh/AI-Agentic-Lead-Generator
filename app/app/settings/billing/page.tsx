@@ -3,6 +3,8 @@ import { redirect } from "next/navigation"
 import { BillingClient } from "./billing-client"
 import { PlanType } from "@/lib/billing-shared"
 
+export const dynamic = "force-dynamic"
+
 export const metadata = {
   title: "Billing | LeadGenAI",
 }

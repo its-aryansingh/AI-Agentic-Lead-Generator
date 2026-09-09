@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ListOrdered, ListPlus, Users, ArrowRight } from "lucide-react"
 
+export const dynamic = "force-dynamic"
+
 /**
  * /app/sequences — list of the user's multi-step outreach sequences.
  */

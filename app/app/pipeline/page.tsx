@@ -7,6 +7,8 @@ import { PipelineClient, type Recipient } from "./pipeline-client"
  * Drag-to-advance kanban board. Updates recipient statuses.
  */
 
+export const dynamic = "force-dynamic"
+
 export default async function PipelinePage() {
   const supabase = await createClient()
 

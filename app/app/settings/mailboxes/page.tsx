@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { warmupCap } from "@/lib/providers/gmail"
 
+export const dynamic = "force-dynamic"
+
 /**
  * /app/settings/mailboxes — connect a sending Gmail + see warm-up status.
  *

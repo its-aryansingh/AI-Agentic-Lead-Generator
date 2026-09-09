@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
+export const dynamic = "force-dynamic"
+
 /**
  * Voice anchor — the user pastes one example of an email they wrote so
  * the drafter can match their register. Persisted to public.users.
