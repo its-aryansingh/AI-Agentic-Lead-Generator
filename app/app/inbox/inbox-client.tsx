@@ -8,7 +8,6 @@ import { EmptyState } from "@/components/ui/empty-state"
 import { Mail, Check, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { markHandled } from "../actions"
-import { useFormStatus } from "react-dom"
 
 export interface Reply {
   id: string
@@ -133,6 +132,7 @@ function ReplyCard({
   categoryColor: string
 }) {
   const [expanded, setExpanded] = React.useState(false)
+  const [isSubmitting, setIsSubmitting] = React.useState(false)
 
   // Relative time formatter
   const timeAgo = (dateStr: string) => {
@@ -205,32 +205,29 @@ function ReplyCard({
         )}
 
         <div className="flex items-center justify-end mt-2">
-          <form action={onHandle}>
-            <input type="hidden" name="id" value={reply.id} />
-            <SubmitButton />
-          </form>
+          <Button 
+            type="button" 
+            size="sm" 
+            variant="outline" 
+            disabled={isSubmitting}
+            onClick={async () => {
+              setIsSubmitting(true)
+              const fd = new FormData()
+              fd.append("id", reply.id)
+              await onHandle(fd)
+              setIsSubmitting(false)
+            }}
+            className="gap-2 group-hover:bg-primary group-hover:text-primary-foreground group-hover:border-primary transition-all"
+          >
+            {isSubmitting ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Check className="w-4 h-4 opacity-70" />
+            )}
+            Mark handled
+          </Button>
         </div>
       </CardContent>
     </Card>
-  )
-}
-
-function SubmitButton() {
-  const { pending } = useFormStatus()
-  return (
-    <Button 
-      type="submit" 
-      size="sm" 
-      variant="outline" 
-      disabled={pending}
-      className="gap-2 group-hover:bg-primary group-hover:text-primary-foreground group-hover:border-primary transition-all"
-    >
-      {pending ? (
-        <Loader2 className="w-4 h-4 animate-spin" />
-      ) : (
-        <Check className="w-4 h-4 opacity-70" />
-      )}
-      Mark handled
-    </Button>
   )
 }

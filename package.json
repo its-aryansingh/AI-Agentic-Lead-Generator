@@ -8,7 +8,7 @@
   "packageManager": "npm@10.9.7",
   "scripts": {
     "dev": "next dev",
-    "build": "cross-env NODE_OPTIONS=--max_old_space_size=4096 next build",
+    "build": "cross-env NODE_ENV=production NODE_OPTIONS=--max_old_space_size=4096 next build",
     "start": "next start -H 0.0.0.0",
     "lint": "eslint",
     "test": "node --test --experimental-strip-types tests/*.test.ts tests/evals/*.test.ts",
