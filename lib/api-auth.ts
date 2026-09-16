@@ -12,7 +12,10 @@
  * bearer-authed callers without changing browser behaviour.
  */
 
-import type { User } from "@supabase/supabase-js"
+// Was `import type { User } from "@supabase/supabase-js"`. The package is
+// gone; AuthedUser is the local equivalent and carries the two fields
+// every call site actually reads (id, email).
+import type { AuthedUser as User } from "@/lib/auth/require-user"
 import { createAdminClient, createClient } from "@/lib/supabase/server"
 import { parseBearerToken, looksLikeJwt } from "@/lib/api-auth-core"
 

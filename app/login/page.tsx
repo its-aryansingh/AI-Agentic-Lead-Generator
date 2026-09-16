@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { signIn, signUp, signInWithGoogle as startGoogleOAuth } from '@/lib/supabase/client'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -12,65 +12,49 @@ export default function LoginPage() {
   const [googleLoading, setGoogleLoading] = useState(false)
   const [error, setError] = useState('')
 
-  async function signInWithGoogle() {
+  function signInWithGoogle() {
     setGoogleLoading(true)
     setError('')
-    const supabase = createClient()
-    await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/api/auth/callback`,
-        scopes: [
-          'https://www.googleapis.com/auth/spreadsheets',
-          'https://www.googleapis.com/auth/drive.file',
-        ].join(' '),
-      },
-    })
-    setGoogleLoading(false)
+    // Full-page redirect into /api/auth/google, which builds the consent
+    // URL server-side. The client never holds the OAuth client secret, and
+    // the state parameter is HMAC-signed there for CSRF protection.
+    startGoogleOAuth('/app/chat')
   }
 
   async function signInWithEmail() {
     setLoading(true)
     setError('')
-    const supabase = createClient()
 
     try {
-      if (password.length < 6) {
-        throw new Error('Password must be at least 6 characters long.')
+      if (password.length < 8) {
+        // Was 6. The server enforces 8 (lib/db/auth.ts), so a lower bar
+        // here just produces a confusing round-trip failure.
+        throw new Error('Password must be at least 8 characters long.')
       }
 
-      let activeSession = null
+      // Sign in, and fall back to creating the account — the same
+      // "try sign-in, else sign-up" behaviour this page had before.
+      // Both routes set an httpOnly session cookie server-side; the token
+      // is no longer readable by page scripts, which is an improvement on
+      // the Supabase browser client.
+      let result = await signIn(email, password)
 
-      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
-
-      if (signInError) {
-        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email, password })
-        if (signUpError) {
-          throw new Error(signUpError.message || signInError.message)
+      if (!result.ok) {
+        const created = await signUp(email, password)
+        // A failed sign-up on an existing email means the password was
+        // wrong, not that the address is taken. Report the sign-in error.
+        if (!created.ok) {
+          throw new Error(
+            /already exists/i.test(created.error ?? '')
+              ? 'Invalid email or password'
+              : created.error ?? result.error ?? 'Sign-in failed',
+          )
         }
-
-        if (signUpData.session) {
-          activeSession = signUpData.session
-        } else {
-          const { data: retryData, error: retryError } = await supabase.auth.signInWithPassword({ email, password })
-          if (retryError) throw retryError
-          activeSession = retryData.session
-        }
-      } else {
-        activeSession = signInData.session
+        result = created
       }
 
-      if (activeSession?.user) {
-        const { error: upsertError } = await supabase.from('users').upsert({
-          id: activeSession.user.id,
-          email: activeSession.user.email,
-        }, { onConflict: 'id' })
-
-        if (upsertError) {
-          console.error('Failed to create public user record:', upsertError)
-        }
-      }
-
+      // The user row is created by the server during sign-up, so the
+      // browser-side users.upsert this page used to do is gone.
       router.push('/app/chat')
       router.refresh()
     } catch (err: unknown) {
@@ -81,7 +65,7 @@ export default function LoginPage() {
   }
 
   const isEmailValid = email.includes('@') && email.includes('.')
-  const isFormReady = isEmailValid && password.length >= 6
+  const isFormReady = isEmailValid && password.length >= 8
 
   return (
     <>
