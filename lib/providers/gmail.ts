@@ -11,6 +11,7 @@
  */
 
 import { google } from "googleapis"
+import {isInboundCandidate} from '../gmail-inbound'
 
 function googleConfigured(): boolean {
   return Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)
@@ -65,6 +66,9 @@ export async function sendGmail(opts: {
   body: string
 }): Promise<SendResult> {
   if (!googleConfigured() || opts.refreshToken === "mock") {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("GMAIL_NOT_CONFIGURED")
+    }
     // Simulated send — deterministic-ish fake IDs.
     const id = `mock-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     return { messageId: id, threadId: id, mock: true }
@@ -129,6 +133,7 @@ export async function listRecentInbound(opts: {
         format: "metadata",
         metadataHeaders: ["From", "Subject", "In-Reply-To", "References"],
       })
+      if(!isInboundCandidate(msg.data.labelIds))continue
       const headers = msg.data.payload?.headers ?? []
       const get = (name: string) =>
         headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? ""
@@ -200,6 +205,28 @@ export async function exchangeMailboxCode(
     email: me.data.email ?? "",
     refreshToken: tokens.refresh_token,
   }
+}
+
+export type GmailErrorCode = 'auth' | 'rate_limit' | 'provider' | 'configuration'
+export function classifyGmailError(error: unknown): GmailErrorCode {
+  const status=Number((error as {code?:unknown;response?:{status?:unknown}})?.response?.status ?? (error as {code?:unknown})?.code)
+  if(status===401||status===403)return 'auth'
+  if(status===429)return 'rate_limit'
+  if(!googleConfigured())return 'configuration'
+  return 'provider'
+}
+export async function verifyGmailCredential(refreshToken: string) {
+  if(!googleConfigured())throw new Error('GMAIL_NOT_CONFIGURED')
+  const auth=oauthClient(refreshToken)
+  const gmail=google.gmail({version:'v1',auth})
+  const profile=await gmail.users.getProfile({userId:'me'})
+  return profile.data.emailAddress??''
+}
+export async function revokeGmailCredential(refreshToken: string) {
+  if(!googleConfigured())return
+  const auth=oauthClient(refreshToken)
+  const {token}=await auth.getAccessToken()
+  if(token)await auth.revokeToken(token)
 }
 
 /**

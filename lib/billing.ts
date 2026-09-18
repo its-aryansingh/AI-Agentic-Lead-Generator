@@ -1,7 +1,8 @@
 import Stripe from "stripe"
 import Razorpay from "razorpay"
 import { createAdminClient } from "@/lib/supabase/server"
-import { PLANS, PlanType } from "./billing-shared"
+import { PLANS, PlanType } from "@/lib/billing-shared"
+import { CREDIT_PACKS, CreditPackId } from "@/lib/credit-costs"
 
 export { PLANS, type PlanType } // Re-export for backend files
 
@@ -181,4 +182,110 @@ export async function setSubscriptionStatus(
     .from("users")
     .update({ subscription_status: status })
     .eq("razorpay_subscription_id", subscriptionId)
+}
+
+// ---------------------------------------------------------------------
+// Credit top-ups — one-time credit pack purchases and enterprise grants.
+// These do NOT reset the billing cycle, only add to credits_remaining.
+// ---------------------------------------------------------------------
+
+/**
+ * Add `creditsToAdd` credits to a user's current balance.
+ * Writes a credit_transactions ledger entry for the audit trail.
+ *
+ * @param userId       Target user.
+ * @param creditsToAdd Number of credits to add (must be > 0).
+ * @param reason       Human-readable ledger reason (e.g. "credit_pack_pack_6000").
+ * @param paymentId    Optional payment provider reference for traceability.
+ */
+export async function topUpCredits(
+  userId: string,
+  creditsToAdd: number,
+  reason: string,
+  paymentId?: string,
+): Promise<{ ok: boolean; newBalance: number; error?: string }> {
+  if (creditsToAdd <= 0) {
+    return { ok: false, newBalance: 0, error: "Credits to add must be positive." }
+  }
+
+  const admin = createAdminClient()
+
+  // Read current balance.
+  const { data: row, error: readErr } = await admin
+    .from("users")
+    .select("credits_remaining")
+    .eq("id", userId)
+    .maybeSingle()
+
+  if (readErr || !row) {
+    return { ok: false, newBalance: 0, error: "Could not read credit balance." }
+  }
+
+  const current = (row.credits_remaining as number) ?? 0
+  const newBalance = current + creditsToAdd
+
+  const { error: updateErr } = await admin
+    .from("users")
+    .update({ credits_remaining: newBalance })
+    .eq("id", userId)
+
+  if (updateErr) {
+    console.error("[billing] topUpCredits update failed", updateErr)
+    return { ok: false, newBalance: current, error: "Failed to update credit balance." }
+  }
+
+  // Ledger entry — include payment reference when provided.
+  await admin.from("credit_transactions").insert({
+    user_id: userId,
+    delta: creditsToAdd,
+    reason,
+    ...(paymentId ? { payment_id: paymentId } : {}),
+  })
+
+  return { ok: true, newBalance }
+}
+
+/**
+ * Purchase a one-time credit pack for a user.
+ * Looks up the pack from CREDIT_PACKS, calls topUpCredits, then records
+ * the purchase in the credit_packs table.
+ *
+ * @param userId    Target user.
+ * @param packId    Pack identifier — must match a CreditPackId in CREDIT_PACKS.
+ * @param provider  Payment provider ("stripe" | "razorpay").
+ * @param paymentId Provider-issued payment / order ID for traceability.
+ */
+export async function purchaseCreditPack(
+  userId: string,
+  packId: CreditPackId,
+  provider: "stripe" | "razorpay",
+  paymentId: string,
+): Promise<{ ok: boolean; creditsAdded: number; error?: string }> {
+  const pack = CREDIT_PACKS.find((p) => p.id === packId)
+  if (!pack) {
+    return { ok: false, creditsAdded: 0, error: `Unknown pack id: ${packId}` }
+  }
+
+  const topUp = await topUpCredits(
+    userId,
+    pack.credits,
+    `credit_pack_${packId}`,
+    paymentId,
+  )
+
+  if (!topUp.ok) {
+    return { ok: false, creditsAdded: 0, error: topUp.error }
+  }
+
+  // Record the pack purchase for billing history / analytics.
+  const admin = createAdminClient()
+  await admin.from("credit_packs").insert({
+    user_id: userId,
+    pack_id: packId,
+    credits_added: pack.credits,
+    payment_provider: provider,
+    payment_id: paymentId,
+  })
+
+  return { ok: true, creditsAdded: pack.credits }
 }

@@ -1,4 +1,4 @@
-"use client"
+"use client";
 
 /**
  * Client-side chat surface using the Vercel AI SDK's useChat hook.
@@ -13,27 +13,35 @@
  * still feels alive without an Anthropic key.
  */
 
-import * as React from "react"
+import * as React from "react";
 
-import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { cn } from "@/lib/utils"
-import { Globe, UserCheck, Database, Send, HelpCircle, Loader2, Repeat } from "lucide-react"
-import { csvToProspects, type ParsedProspect } from "@/lib/csv-parse"
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
+import {
+  Globe,
+  UserCheck,
+  Database,
+  Send,
+  HelpCircle,
+  Loader2,
+} from "lucide-react";
+import { csvToProspects, type ParsedProspect } from "@/lib/csv-parse";
 
 interface ChatMessage {
-  id: string
-  role: "user" | "assistant"
-  text: string
-  toolCalls?: ToolCall[]
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  toolCalls?: ToolCall[];
 }
 
 interface ToolCall {
-  toolName: string
-  state: "running" | "result"
-  result?: ToolResult
+  toolCallId?: string;
+  toolName: string;
+  state: "running" | "result";
+  result?: ToolResult;
 }
 
 type ToolResult =
@@ -44,92 +52,97 @@ type ToolResult =
   | LaunchCampaignResult
   | SpecialistResult
   | AutomationResult
-  | Record<string, unknown>
+  | Record<string, unknown>;
 
 interface WebSearchResult {
-  count: number
+  count: number;
   candidates: Array<{
-    id: string | null
-    name: string
-    title: string
-    company: string
-    source_url: string
-  }>
-  using_mock_data?: boolean
+    id: string | null;
+    name: string;
+    title: string;
+    company: string;
+    source_url: string;
+  }>;
+  using_mock_data?: boolean;
 }
 
 interface EnrichResult {
-  prospect: { name: string; title: string; company: string; source_url?: string }
+  prospect: {
+    name: string;
+    title: string;
+    company: string;
+    source_url?: string;
+  };
   draft: {
-    research_summary: string
-    email_subject: string
-    email_body: string
-    talking_points: string[]
-  }
+    research_summary: string;
+    email_subject: string;
+    email_body: string;
+    talking_points: string[];
+  };
 }
 
 interface BulkJobResult {
-  job_id?: string
-  prospect_count?: number
-  sheet_url?: string
-  sheet_is_mock?: boolean
-  csv_data_url?: string
-  preview?: Array<{ name: string; title: string; company: string }>
-  credits_remaining?: number
-  error?: string
+  job_id?: string;
+  prospect_count?: number;
+  sheet_url?: string;
+  sheet_is_mock?: boolean;
+  csv_data_url?: string;
+  preview?: Array<{ name: string; title: string; company: string }>;
+  credits_remaining?: number;
+  error?: string;
 }
 
 interface ClarifyResult {
-  question: string
-  suggested_answers?: string[]
+  question: string;
+  suggested_answers?: string[];
 }
 
 interface LaunchCampaignResult {
-  campaign_id?: string
-  scheduled?: number
-  suppressed_skipped?: number
-  note?: string
-  error?: string
+  campaign_id?: string;
+  scheduled?: number;
+  suppressed_skipped?: number;
+  note?: string;
+  error?: string;
 }
 
 /** Result returned by an orchestrator run_* delegation (one specialist). */
 interface SpecialistResult {
-  specialist?: string
-  role?: string
-  emoji?: string
-  summary?: string
-  steps?: number
-  tools_used?: string[]
-  outputs?: Array<{ tool: string; output: unknown }>
-  used_mock?: boolean
-  error?: string
+  specialist?: string;
+  role?: string;
+  emoji?: string;
+  summary?: string;
+  steps?: number;
+  tools_used?: string[];
+  outputs?: Array<{ tool: string; output: unknown }>;
+  used_mock?: boolean;
+  error?: string;
 }
 
 /** Result returned by the create_automation tool. */
 interface AutomationResult {
   automation?: {
-    id: string
-    name: string
-    schedule_frequency: string | null
-    next_run_at: string | null
-  }
-  next_run_at?: string
-  error?: string
+    id: string;
+    name: string;
+    schedule_frequency: string | null;
+    next_run_at: string | null;
+  };
+  next_run_at?: string;
+  error?: string;
 }
 
 interface InitialMessage {
-  id: string
-  role: "user" | "assistant"
-  text: string
-  toolCalls?: Array<{ toolName: string; result?: unknown }>
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  toolCalls?: Array<{ toolName: string; result?: unknown }>;
 }
 
 export function ChatClient({
   initialSessionId,
   initialMessages = [],
 }: {
-  initialSessionId?: string
-  initialMessages?: InitialMessage[]
+  initialSessionId?: string;
+  initialMessages?: InitialMessage[];
 }) {
   // Hydrate persisted tool-call shapes into the runtime ChatMessage type
   // (they share id/role/text; the toolCalls array's `state` flips to
@@ -143,37 +156,42 @@ export function ChatClient({
       state: "result" as const,
       result: (tc.result ?? {}) as ToolResult,
     })),
-  }))
-  const [messages, setMessages] = React.useState<ChatMessage[]>(hydrated)
-  const [input, setInput] = React.useState("")
-  const [pending, setPending] = React.useState(false)
-  const [sessionId, setSessionId] = React.useState<string | undefined>(initialSessionId)
-  const [error, setError] = React.useState<string | null>(null)
-  const scrollRef = React.useRef<HTMLDivElement>(null)
+  }));
+  const [messages, setMessages] = React.useState<ChatMessage[]>(hydrated);
+  const [input, setInput] = React.useState("");
+  const [pending, setPending] = React.useState(false);
+  const [sessionId, setSessionId] = React.useState<string | undefined>(
+    initialSessionId,
+  );
+  const [error, setError] = React.useState<string | null>(null);
+  const scrollRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" })
-  }, [messages.length])
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [messages.length]);
 
   async function submit(textOverride?: string) {
-    const text = (textOverride ?? input).trim()
-    if (!text || pending) return
-    setError(null)
+    const text = (textOverride ?? input).trim();
+    if (!text || pending) return;
+    setError(null);
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
       text,
-    }
-    const assistantId = crypto.randomUUID()
+    };
+    const assistantId = crypto.randomUUID();
     const placeholder: ChatMessage = {
       id: assistantId,
       role: "assistant",
       text: "",
-    }
-    const nextMessages = [...messages, userMsg, placeholder]
-    setMessages(nextMessages)
-    setInput("")
-    setPending(true)
+    };
+    const nextMessages = [...messages, userMsg, placeholder];
+    setMessages(nextMessages);
+    setInput("");
+    setPending(true);
 
     try {
       // Build the UIMessage[] payload the API expects.
@@ -183,67 +201,85 @@ export function ChatClient({
           id: m.id,
           role: m.role,
           parts: [{ type: "text" as const, text: m.text }],
-        }))
+        }));
 
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ sessionId, messages: apiMessages }),
-      })
+      });
 
       if (!res.ok) {
-        throw new Error(`Chat API ${res.status}`)
+        throw new Error(`Chat API ${res.status}`);
       }
 
-      const newSession = res.headers.get("x-session-id")
+      const newSession = res.headers.get("x-session-id");
       if (newSession) {
-        setSessionId(newSession)
+        setSessionId(newSession);
         // Once a session id exists, mirror it into the URL so refresh
         // and back-button keep the conversation alive.
         if (!sessionId && typeof window !== "undefined") {
-          window.history.replaceState({}, "", `/app/chat/${newSession}`)
+          window.history.replaceState({}, "", `/app/chat/${newSession}`);
         }
       }
 
-      const contentType = res.headers.get("content-type") ?? ""
+      const contentType = res.headers.get("content-type") ?? "";
 
       // Mock path — single JSON message.
       if (contentType.includes("application/json")) {
         const data = (await res.json()) as {
-          mock?: boolean
-          sessionId?: string
-          assistant?: { text: string }
-        }
+          mock?: boolean;
+          sessionId?: string;
+          assistant?: { text: string };
+        };
         if (data.sessionId) {
-          setSessionId(data.sessionId)
+          setSessionId(data.sessionId);
           if (!sessionId && typeof window !== "undefined") {
-            window.history.replaceState({}, "", `/app/chat/${data.sessionId}`)
+            window.history.replaceState({}, "", `/app/chat/${data.sessionId}`);
           }
         }
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId ? { ...m, text: data.assistant?.text ?? "" } : m,
+            m.id === assistantId
+              ? { ...m, text: data.assistant?.text ?? "" }
+              : m,
           ),
-        )
-        return
+        );
+        return;
       }
 
       // Real stream — read the UI-message protocol from the AI SDK.
       await consumeUIStream(res.body!, (event) => {
-        setMessages((prev) => applyStreamEvent(prev, assistantId, event))
-      })
+        setMessages((prev) => applyStreamEvent(prev, assistantId, event));
+      });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Something went wrong"
-      setError(msg)
+      const msg = err instanceof Error ? err.message : "Something went wrong";
+      setError(msg);
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
-            ? { ...m, text: m.text || "Sorry — I hit an error sending that. Try again?" }
+            ? {
+                ...m,
+                text:
+                  m.text || "Sorry — I hit an error sending that. Try again?",
+              }
             : m,
         ),
-      )
+      );
     } finally {
-      setPending(false)
+      // Ensure all tool calls on this assistant message are marked as completed so spinners don't linger
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== assistantId || !m.toolCalls?.length) return m;
+          return {
+            ...m,
+            toolCalls: m.toolCalls.map((tc) =>
+              tc.state === "running" ? { ...tc, state: "result" as const } : tc,
+            ),
+          };
+        }),
+      );
+      setPending(false);
     }
   }
 
@@ -274,8 +310,8 @@ export function ChatClient({
         <form
           className="max-w-3xl mx-auto px-6 py-4 flex gap-2 items-end"
           onSubmit={(e) => {
-            e.preventDefault()
-            submit()
+            e.preventDefault();
+            submit();
           }}
         >
           <Textarea
@@ -286,8 +322,8 @@ export function ChatClient({
             disabled={pending}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault()
-                submit()
+                e.preventDefault();
+                submit();
               }
             }}
           />
@@ -297,7 +333,7 @@ export function ChatClient({
         </form>
       </footer>
     </>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------
@@ -307,48 +343,61 @@ export function ChatClient({
 type StreamEvent =
   | { kind: "text"; delta: string }
   | { kind: "tool-call"; toolName: string; toolCallId: string }
-  | { kind: "tool-result"; toolCallId: string; toolName: string; result: ToolResult }
+  | {
+      kind: "tool-result";
+      toolCallId: string;
+      toolName: string;
+      result: ToolResult;
+    };
 
 async function consumeUIStream(
   body: ReadableStream<Uint8Array>,
   onEvent: (e: StreamEvent) => void,
 ) {
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
   while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
     // The AI SDK v6 UI stream is newline-delimited JSON.
-    const lines = buffer.split("\n")
-    buffer = lines.pop() ?? ""
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
     for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      const stripped = trimmed.replace(/^data:\s*/, "")
-      if (stripped === "[DONE]") continue
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const stripped = trimmed.replace(/^data:\s*/, "");
+      if (stripped === "[DONE]") continue;
       try {
-        const event = JSON.parse(stripped) as Record<string, unknown>
+        const event = JSON.parse(stripped) as Record<string, unknown>;
         // Text deltas — keys vary across SDK versions; cover both shapes.
         if (event.type === "text-delta" || event.type === "text") {
-          const delta = (event.delta as string) ?? (event.text as string)
-          if (typeof delta === "string") onEvent({ kind: "text", delta })
+          const delta = (event.delta as string) ?? (event.text as string);
+          if (typeof delta === "string") onEvent({ kind: "text", delta });
         }
-        if (event.type === "tool-call" || event.type === "tool-input-available") {
+        if (
+          event.type === "tool-call" ||
+          event.type === "tool-input-available"
+        ) {
           onEvent({
             kind: "tool-call",
             toolName: String(event.toolName ?? event.name ?? ""),
             toolCallId: String(event.toolCallId ?? event.id ?? ""),
-          })
+          });
         }
-        if (event.type === "tool-result" || event.type === "tool-output-available") {
+        if (
+          event.type === "tool-result" ||
+          event.type === "tool-output-available" ||
+          event.type === "tool-execution-finish" ||
+          event.type === "tool_result"
+        ) {
           onEvent({
             kind: "tool-result",
             toolName: String(event.toolName ?? event.name ?? ""),
             toolCallId: String(event.toolCallId ?? event.id ?? ""),
             result: (event.result ?? event.output) as ToolResult,
-          })
+          });
         }
       } catch {
         // Some lines are framing meta (start, finish, etc.) — ignore.
@@ -363,27 +412,48 @@ function applyStreamEvent(
   event: StreamEvent,
 ): ChatMessage[] {
   return prev.map((m) => {
-    if (m.id !== assistantId) return m
+    if (m.id !== assistantId) return m;
     if (event.kind === "text") {
-      return { ...m, text: m.text + event.delta }
+      return { ...m, text: m.text + event.delta };
     }
     if (event.kind === "tool-call") {
-      const toolCalls = [...(m.toolCalls ?? []), { toolName: event.toolName, state: "running" as const }]
-      return { ...m, toolCalls }
+      return {
+        ...m,
+        toolCalls: [
+          ...(m.toolCalls ?? []),
+          {
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            state: "running" as const,
+          },
+        ],
+      };
     }
     if (event.kind === "tool-result") {
-      const toolCalls = [...(m.toolCalls ?? [])]
-      const last = [...toolCalls].reverse().find((t) => t.toolName === event.toolName && t.state === "running")
+      const toolCalls = [...(m.toolCalls ?? [])];
+      const last = [...toolCalls]
+        .reverse()
+        .find(
+          (t) =>
+            t.state === "running" &&
+            (t.toolCallId === event.toolCallId ||
+              (!t.toolCallId && t.toolName === event.toolName)),
+        );
       if (last) {
-        last.state = "result"
-        last.result = event.result
+        last.state = "result";
+        last.result = event.result;
       } else {
-        toolCalls.push({ toolName: event.toolName, state: "result", result: event.result })
+        toolCalls.push({
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          state: "result",
+          result: event.result,
+        });
       }
-      return { ...m, toolCalls }
+      return { ...m, toolCalls };
     }
-    return m
-  })
+    return m;
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -398,11 +468,13 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           {message.text}
         </div>
       </div>
-    )
+    );
   }
   return (
     <div className="flex flex-col gap-3">
-      <div className="text-xs text-muted-foreground">LeadGenAI</div>
+      <div className="text-xs text-muted-foreground font-medium text-indigo-400">
+        Aravya SalesEngAI
+      </div>
       {message.toolCalls?.map((tc, i) => (
         <ToolCallCard key={i} toolCall={tc} />
       ))}
@@ -415,7 +487,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         <div className="text-sm text-muted-foreground italic">Thinking…</div>
       )}
     </div>
-  )
+  );
 }
 
 const SPECIALIST_LABELS: Record<string, string> = {
@@ -424,30 +496,38 @@ const SPECIALIST_LABELS: Record<string, string> = {
   run_copywriter: "✍️ Copywriter",
   run_compliance: "🛡️ Compliance",
   run_outreach: "📤 Outreach",
-}
+};
 
 function runningLabel(toolName: string): string {
-  const label = SPECIALIST_LABELS[toolName]
-  return label ? `${label} working…` : `Running ${toolName}…`
+  const label = SPECIALIST_LABELS[toolName];
+  return label ? `${label} working…` : `Running ${toolName}…`;
 }
 
 function ToolCallCard({ toolCall }: { toolCall: ToolCall }) {
   if (toolCall.state === "running") {
     return (
-      <Card size="sm" className="bg-muted/20 border-muted-foreground/20 overflow-hidden relative">
-        <div className="absolute top-0 left-0 h-[2px] w-1/3 bg-primary animate-pulse-fast" style={{ animation: "slideRight 1.5s infinite linear" }} />
+      <Card
+        size="sm"
+        className="bg-muted/20 border-muted-foreground/20 overflow-hidden relative"
+      >
+        <div
+          className="absolute top-0 left-0 h-[2px] w-1/3 bg-primary animate-pulse-fast"
+          style={{ animation: "slideRight 1.5s infinite linear" }}
+        />
         <CardContent className="text-xs text-muted-foreground py-3 flex items-center gap-3">
           <Loader2 className="w-4 h-4 animate-spin text-primary" />
           <span>{runningLabel(toolCall.toolName)}</span>
         </CardContent>
       </Card>
-    )
+    );
   }
 
   if (toolCall.toolName.startsWith("run_")) {
-    return <SpecialistCard result={toolCall.result as SpecialistResult} />
+    return <SpecialistCard result={toolCall.result as SpecialistResult} />;
   }
-  return <ToolOutputCard toolName={toolCall.toolName} result={toolCall.result} />
+  return (
+    <ToolOutputCard toolName={toolCall.toolName} result={toolCall.result} />
+  );
 }
 
 /** Renders one underlying handler's output (used directly and nested in specialist cards). */
@@ -455,29 +535,92 @@ function ToolOutputCard({
   toolName,
   result,
 }: {
-  toolName: string
-  result?: ToolResult
+  toolName: string;
+  result?: ToolResult;
 }) {
   if (
     toolName === "web_search" ||
     toolName === "public_source_search" ||
     toolName === "add_named_prospects"
   ) {
-    return <WebSearchCard result={result as WebSearchResult} />
+    return <WebSearchCard result={result as WebSearchResult} />;
   }
-  if (toolName === "enrich_prospect") return <EnrichCard result={result as EnrichResult} />
-  if (toolName === "start_bulk_job") return <BulkJobCard result={result as BulkJobResult} />
+  if (toolName === "enrich_prospect")
+    return <EnrichCard result={result as EnrichResult} />;
+  if (toolName === "start_bulk_job")
+    return <BulkJobCard result={result as BulkJobResult} />;
   if (toolName === "launch_campaign")
-    return <LaunchCampaignCard result={result as LaunchCampaignResult} />
+    return <LaunchCampaignCard result={result as LaunchCampaignResult} />;
   if (toolName === "create_automation")
-    return <AutomationCard result={result as AutomationResult} />
-  if (toolName === "clarify_question") return <ClarifyCard result={result as ClarifyResult} />
-  return null
+    return <AutomationCard result={result as AutomationResult} />;
+  if (toolName === "clarify_question")
+    return <ClarifyCard result={result as ClarifyResult} />;
+  if (toolName === "search_leads") {
+    const res = result as { count?: number; leads?: Array<unknown> };
+    const count = res?.count ?? res?.leads?.length ?? 0;
+    return (
+      <div className="text-xs text-muted-foreground bg-muted/20 border border-border/40 rounded-md px-3 py-2 flex items-center gap-2">
+        <span className="text-primary font-medium">
+          📋 Found {count} lead{count === 1 ? "" : "s"} in database
+        </span>
+      </div>
+    );
+  }
+  if (toolName === "save_candidates_to_leads") {
+    const res = result as {
+      count?: number;
+      leads?: Array<unknown>;
+      error?: string;
+    };
+    if (res?.error) {
+      return (
+        <div className="text-xs text-destructive bg-destructive/5 border border-destructive/20 rounded-md px-3 py-2">
+          Could not add leads: {res.error}
+        </div>
+      );
+    }
+    const count = res?.count ?? res?.leads?.length ?? 0;
+    return (
+      <div className="text-xs text-muted-foreground bg-muted/20 border border-border/40 rounded-md px-3 py-2">
+        <span className="text-primary font-medium">
+          Added {count} lead{count === 1 ? "" : "s"} to Leads
+        </span>
+      </div>
+    );
+  }
+  if (toolName === "enrich_lead") {
+    const res = result as EnrichResult;
+    if (res?.draft?.email_subject) {
+      return <EnrichCard result={res} />;
+    }
+    return (
+      <div className="text-xs text-muted-foreground bg-muted/20 border border-border/40 rounded-md px-3 py-2 flex items-center gap-2">
+        <span className="text-primary font-medium">
+          ⚡ Lead researched &amp; qualification email drafted
+        </span>
+      </div>
+    );
+  }
+  if (toolName === "list_intake_jobs" || toolName === "enrich_intake_job") {
+    const res = result as {
+      message?: string;
+      count?: number;
+      enriched_count?: number;
+    };
+    return (
+      <div className="text-xs text-muted-foreground bg-muted/20 border border-border/40 rounded-md px-3 py-2 flex items-center gap-2">
+        <span className="text-primary font-medium">
+          {res?.message ?? `⚙️ ${toolName.replace(/_/g, " ")} complete`}
+        </span>
+      </div>
+    );
+  }
+  return null;
 }
 
 /** A single specialist delegation: badge + summary + its nested tool outputs. */
 function SpecialistCard({ result }: { result?: SpecialistResult }) {
-  if (!result) return null
+  if (!result) return null;
   if (result.error) {
     return (
       <Card size="sm" className="border-destructive/30 bg-destructive/5">
@@ -486,35 +629,40 @@ function SpecialistCard({ result }: { result?: SpecialistResult }) {
           {result.role ?? "Specialist"} couldn’t finish: {result.error}
         </CardContent>
       </Card>
-    )
+    );
   }
   return (
-    <Card size="sm" className="glass-card overflow-hidden hover:shadow-[0_8px_24px_oklch(0_0_0/4%)] hover:border-primary/20 transition-all duration-300">
-      <CardHeader className="px-4 py-3 bg-muted/20 border-b border-border/50">
+    <Card
+      size="sm"
+      className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors"
+    >
+      <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <div className="flex items-center justify-center size-6 rounded-md bg-background shadow-sm border border-border">
-            <span className="text-sm leading-none">{result.emoji ?? "🤖"}</span>
-          </div>
-          <span className="tracking-tight">{result.role ?? "Specialist"}</span>
+          <span className="text-base leading-none">{result.emoji ?? "🤖"}</span>
+          {result.role ?? "Specialist"}
           {result.used_mock && (
-            <Badge variant="secondary" className="ml-auto align-middle text-[10px] bg-background/50">
+            <Badge
+              variant="secondary"
+              className="ml-auto align-middle text-[10px]"
+            >
               demo data
             </Badge>
           )}
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4 p-4 relative">
-        <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-primary/40 to-transparent" />
-        <div className="pl-2 flex flex-col gap-3">
-          {result.summary && (
-            <div className="text-sm leading-relaxed text-foreground/90 whitespace-pre-wrap">{result.summary}</div>
-          )}
-          <div className="flex flex-col gap-2">
-            {result.outputs?.map((o, i) => (
-              <ToolOutputCard key={i} toolName={o.tool} result={o.output as ToolResult} />
-            ))}
+      <CardContent className="flex flex-col gap-3 p-4">
+        {result.summary && (
+          <div className="text-sm leading-relaxed whitespace-pre-wrap">
+            {result.summary}
           </div>
-        </div>
+        )}
+        {result.outputs?.map((o, i) => (
+          <ToolOutputCard
+            key={i}
+            toolName={o.tool}
+            result={o.output as ToolResult}
+          />
+        ))}
         {result.tools_used && result.tools_used.length > 0 && (
           <div className="text-[11px] text-muted-foreground border-t border-border/50 pt-2">
             via {result.tools_used.join(", ")}
@@ -522,7 +670,7 @@ function SpecialistCard({ result }: { result?: SpecialistResult }) {
         )}
       </CardContent>
     </Card>
-  )
+  );
 }
 
 function AutomationCard({ result }: { result?: AutomationResult }) {
@@ -534,53 +682,59 @@ function AutomationCard({ result }: { result?: AutomationResult }) {
           {result?.error ?? "Couldn’t create the automation."}
         </CardContent>
       </Card>
-    )
+    );
   }
-  const next = result.next_run_at ?? result.automation?.next_run_at
+  const next = result.next_run_at ?? result.automation?.next_run_at;
   return (
-    <Card size="sm" className="glass-card overflow-hidden hover:shadow-[0_8px_24px_oklch(0_0_0/4%)] hover:border-primary/20 transition-all duration-300">
-      <CardHeader className="px-4 py-3 bg-muted/20 border-b border-border/50">
+    <Card size="sm" className="overflow-hidden border-muted-foreground/20">
+      <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <div className="flex items-center justify-center size-6 rounded-md bg-primary/10 text-primary shadow-sm border border-primary/20">
-            <Repeat className="size-3.5" />
-          </div>
-          <span className="tracking-tight">Automation created</span>
-          <span className="font-normal text-muted-foreground truncate max-w-[200px]">
-            — {result.automation?.name ?? "Untitled"}
-          </span>
+          <span className="text-base leading-none">⏱</span>
+          Automation created — {result.automation?.name ?? "Untitled"}
         </CardTitle>
       </CardHeader>
-      <CardContent className="p-4 text-sm text-foreground/90 flex flex-col gap-2 relative">
-        <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-primary/40 to-transparent" />
-        <div className="pl-2">
+      <CardContent className="p-4 text-sm text-muted-foreground flex flex-col gap-1">
+        <div>
           Runs{" "}
-          <span className="text-foreground font-medium bg-muted/50 px-1.5 py-0.5 rounded border border-border/50">
+          <span className="text-foreground font-medium">
             {result.automation?.schedule_frequency ?? "on schedule"}
           </span>
           .
         </div>
         {next && (
           <div>
-            Next run: <span className="text-foreground">{new Date(next).toLocaleString()}</span>
+            Next run:{" "}
+            <span className="text-foreground">
+              {new Date(next).toLocaleString()}
+            </span>
           </div>
         )}
-        <a href="/app/automations" className="text-primary hover:underline mt-1 w-fit">
+        <a
+          href="/app/automations"
+          className="text-primary hover:underline mt-1 w-fit"
+        >
           Manage automations →
         </a>
       </CardContent>
     </Card>
-  )
+  );
 }
 
 function WebSearchCard({ result }: { result: WebSearchResult }) {
   return (
-    <Card size="sm" className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors">
+    <Card
+      size="sm"
+      className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors"
+    >
       <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
           <Globe className="w-4 h-4 text-primary" />
           Found {result.count} candidate{result.count === 1 ? "" : "s"}
           {result.using_mock_data && (
-            <Badge variant="secondary" className="ml-auto align-middle text-[10px]">
+            <Badge
+              variant="secondary"
+              className="ml-auto align-middle text-[10px]"
+            >
               demo data
             </Badge>
           )}
@@ -590,7 +744,9 @@ function WebSearchCard({ result }: { result: WebSearchResult }) {
         <ul className="flex flex-col gap-3">
           {result.candidates.slice(0, 8).map((c, i) => (
             <li key={c.id ?? i} className="flex flex-col group">
-              <span className="font-medium group-hover:text-primary transition-colors">{c.name}</span>
+              <span className="font-medium group-hover:text-primary transition-colors">
+                {c.name}
+              </span>
               <span className="text-xs text-muted-foreground">
                 {c.title} · {c.company}
               </span>
@@ -604,13 +760,16 @@ function WebSearchCard({ result }: { result: WebSearchResult }) {
         )}
       </CardContent>
     </Card>
-  )
+  );
 }
 
 function EnrichCard({ result }: { result: EnrichResult }) {
-  const fullEmail = `Subject: ${result.draft.email_subject}\n\n${result.draft.email_body}`
+  const fullEmail = `Subject: ${result.draft.email_subject}\n\n${result.draft.email_body}`;
   return (
-    <Card size="sm" className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors">
+    <Card
+      size="sm"
+      className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors"
+    >
       <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
           <UserCheck className="w-4 h-4 text-primary" />
@@ -643,7 +802,7 @@ function EnrichCard({ result }: { result: EnrichResult }) {
         </div>
       </CardContent>
     </Card>
-  )
+  );
 }
 
 function BulkJobCard({ result }: { result: BulkJobResult }) {
@@ -655,16 +814,23 @@ function BulkJobCard({ result }: { result: BulkJobResult }) {
           {result.error}
         </CardContent>
       </Card>
-    )
+    );
   }
   return (
-    <Card size="sm" className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors">
+    <Card
+      size="sm"
+      className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors"
+    >
       <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
           <Database className="w-4 h-4 text-primary" />
-          Enriched {result.prospect_count} prospect{result.prospect_count === 1 ? "" : "s"}
+          Enriched {result.prospect_count} prospect
+          {result.prospect_count === 1 ? "" : "s"}
           {result.sheet_is_mock && (
-            <Badge variant="secondary" className="ml-auto align-middle text-[10px]">
+            <Badge
+              variant="secondary"
+              className="ml-auto align-middle text-[10px]"
+            >
               demo data
             </Badge>
           )}
@@ -688,7 +854,7 @@ function BulkJobCard({ result }: { result: BulkJobResult }) {
           {result.csv_data_url && (
             <a
               href={result.csv_data_url}
-              download={`leadgenai-prospects-${result.job_id ?? "export"}.csv`}
+              download={`salesengai-prospects-${result.job_id ?? "export"}.csv`}
               className={cn(
                 "inline-flex items-center justify-center rounded-md px-3 py-1.5 text-xs font-medium shadow-sm",
                 "border border-border bg-card hover:bg-muted transition-colors",
@@ -706,7 +872,9 @@ function BulkJobCard({ result }: { result: BulkJobResult }) {
             <ul className="text-sm flex flex-col gap-1.5">
               {result.preview.map((p, i) => (
                 <li key={i}>
-                  <span className="font-medium text-foreground/90">{p.name}</span>{" "}
+                  <span className="font-medium text-foreground/90">
+                    {p.name}
+                  </span>{" "}
                   <span className="text-muted-foreground">
                     — {p.title} at {p.company}
                   </span>
@@ -734,7 +902,7 @@ function BulkJobCard({ result }: { result: BulkJobResult }) {
         )}
       </CardContent>
     </Card>
-  )
+  );
 }
 
 function LaunchCampaignCard({ result }: { result: LaunchCampaignResult }) {
@@ -746,10 +914,13 @@ function LaunchCampaignCard({ result }: { result: LaunchCampaignResult }) {
           {result.error}
         </CardContent>
       </Card>
-    )
+    );
   }
   return (
-    <Card size="sm" className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors">
+    <Card
+      size="sm"
+      className="overflow-hidden border-muted-foreground/20 hover:border-muted-foreground/40 transition-colors"
+    >
       <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
           <Send className="w-4 h-4 text-primary" />
@@ -761,7 +932,8 @@ function LaunchCampaignCard({ result }: { result: LaunchCampaignResult }) {
         {typeof result.suppressed_skipped === "number" &&
           result.suppressed_skipped > 0 && (
             <div className="text-xs text-muted-foreground bg-muted/30 px-2 py-1.5 rounded border border-border/50">
-              <span className="font-medium">{result.suppressed_skipped}</span> skipped (on suppression list)
+              <span className="font-medium">{result.suppressed_skipped}</span>{" "}
+              skipped (on suppression list)
             </div>
           )}
         {result.note && (
@@ -776,8 +948,8 @@ function LaunchCampaignCard({ result }: { result: LaunchCampaignResult }) {
           >
             View pipeline <span aria-hidden="true">&rarr;</span>
           </a>
-          <a 
-            href="/app/inbox" 
+          <a
+            href="/app/inbox"
             className="text-xs font-medium text-muted-foreground hover:text-primary transition-colors flex items-center gap-1"
           >
             Reply inbox <span aria-hidden="true">&rarr;</span>
@@ -785,7 +957,7 @@ function LaunchCampaignCard({ result }: { result: LaunchCampaignResult }) {
         </div>
       </CardContent>
     </Card>
-  )
+  );
 }
 
 function ClarifyCard({ result }: { result: ClarifyResult }) {
@@ -799,7 +971,11 @@ function ClarifyCard({ result }: { result: ClarifyResult }) {
         {result.suggested_answers && result.suggested_answers.length > 0 && (
           <div className="flex flex-wrap gap-2 pl-7">
             {result.suggested_answers.map((s, i) => (
-              <Badge key={i} variant="secondary" className="hover:bg-primary hover:text-primary-foreground cursor-default transition-colors">
+              <Badge
+                key={i}
+                variant="secondary"
+                className="hover:bg-primary hover:text-primary-foreground cursor-default transition-colors"
+              >
                 {s}
               </Badge>
             ))}
@@ -807,7 +983,7 @@ function ClarifyCard({ result }: { result: ClarifyResult }) {
         )}
       </CardContent>
     </Card>
-  )
+  );
 }
 
 function Section({
@@ -815,9 +991,9 @@ function Section({
   children,
   copyText,
 }: {
-  label: string
-  children: React.ReactNode
-  copyText?: string
+  label: string;
+  children: React.ReactNode;
+  copyText?: string;
 }) {
   return (
     <div>
@@ -827,7 +1003,7 @@ function Section({
       </div>
       <div className="text-sm whitespace-pre-wrap">{children}</div>
     </div>
-  )
+  );
 }
 
 function CopyButton({
@@ -835,19 +1011,19 @@ function CopyButton({
   label = "Copy",
   className,
 }: {
-  text: string
-  label?: string
-  className?: string
+  text: string;
+  label?: string;
+  className?: string;
 }) {
-  const [copied, setCopied] = React.useState(false)
+  const [copied, setCopied] = React.useState(false);
   return (
     <button
       type="button"
       onClick={async () => {
         try {
-          await navigator.clipboard.writeText(text)
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
         } catch {
           /* clipboard blocked — fail silently */
         }
@@ -860,7 +1036,7 @@ function CopyButton({
     >
       {copied ? "Copied" : label}
     </button>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------
@@ -873,21 +1049,21 @@ function CsvDropZone({
   disabled,
   onParsed,
 }: {
-  disabled: boolean
-  onParsed: (prospects: ParsedProspect[]) => void
+  disabled: boolean;
+  onParsed: (prospects: ParsedProspect[]) => void;
 }) {
-  const [open, setOpen] = React.useState(false)
-  const [hover, setHover] = React.useState(false)
-  const [paste, setPaste] = React.useState("")
-  const [warnings, setWarnings] = React.useState<string[]>([])
+  const [open, setOpen] = React.useState(false);
+  const [hover, setHover] = React.useState(false);
+  const [paste, setPaste] = React.useState("");
+  const [warnings, setWarnings] = React.useState<string[]>([]);
 
   async function ingest(text: string) {
-    const { prospects, warnings } = csvToProspects(text)
-    setWarnings(warnings)
-    if (prospects.length === 0) return
-    onParsed(prospects)
-    setOpen(false)
-    setPaste("")
+    const { prospects, warnings } = csvToProspects(text);
+    setWarnings(warnings);
+    if (prospects.length === 0) return;
+    onParsed(prospects);
+    setOpen(false);
+    setPaste("");
   }
 
   if (!open) {
@@ -902,24 +1078,24 @@ function CsvDropZone({
           Have a CSV? Drop or paste it here.
         </button>
       </div>
-    )
+    );
   }
 
   return (
     <div className="flex flex-col gap-2 pb-2">
       <div
         onDragOver={(e) => {
-          e.preventDefault()
-          setHover(true)
+          e.preventDefault();
+          setHover(true);
         }}
         onDragLeave={() => setHover(false)}
         onDrop={async (e) => {
-          e.preventDefault()
-          setHover(false)
-          const file = e.dataTransfer.files?.[0]
-          if (!file) return
-          const text = await file.text()
-          await ingest(text)
+          e.preventDefault();
+          setHover(false);
+          const file = e.dataTransfer.files?.[0];
+          if (!file) return;
+          const text = await file.text();
+          await ingest(text);
         }}
         className={cn(
           "rounded-md border border-dashed border-border px-3 py-3 text-xs text-muted-foreground transition-colors",
@@ -927,7 +1103,11 @@ function CsvDropZone({
         )}
       >
         Drop a .csv file here, or paste rows below. Header row optional —
-        columns: <code className="font-mono">name, company, title, linkedin_url, email</code>.
+        columns:{" "}
+        <code className="font-mono">
+          name, company, title, linkedin_url, email
+        </code>
+        .
       </div>
       <Textarea
         value={paste}
@@ -949,9 +1129,9 @@ function CsvDropZone({
           variant="ghost"
           size="sm"
           onClick={() => {
-            setOpen(false)
-            setPaste("")
-            setWarnings([])
+            setOpen(false);
+            setPaste("");
+            setWarnings([]);
           }}
         >
           Cancel
@@ -966,7 +1146,7 @@ function CsvDropZone({
         </Button>
       </div>
     </div>
-  )
+  );
 }
 
 function buildCsvMessage(prospects: ParsedProspect[]): string {
@@ -976,9 +1156,9 @@ function buildCsvMessage(prospects: ParsedProspect[]): string {
       (p) =>
         `- ${p.name}${p.company ? ` at ${p.company}` : ""}${p.title ? ` (${p.title})` : ""}`,
     )
-    .join("\n")
+    .join("\n");
   const more =
-    prospects.length > 8 ? `\n…and ${prospects.length - 8} more.` : ""
+    prospects.length > 8 ? `\n…and ${prospects.length - 8} more.` : "";
   // Compose a JSON payload the model can pass straight through to
   // add_named_prospects without any guesswork.
   const json = JSON.stringify(
@@ -988,7 +1168,7 @@ function buildCsvMessage(prospects: ParsedProspect[]): string {
       title: p.title,
       linkedin_url: p.linkedin_url,
     })),
-  )
+  );
   return `I uploaded a CSV with ${prospects.length} prospect${prospects.length === 1 ? "" : "s"}.
 
 Sample:
@@ -996,7 +1176,7 @@ ${sample}${more}
 
 Please stage them via add_named_prospects (use this exact list) and then ask me to confirm before bulk-enriching.
 
-PROSPECTS_JSON=${json}`
+PROSPECTS_JSON=${json}`;
 }
 
 // ---------------------------------------------------------------------
@@ -1008,7 +1188,7 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
     "find me 15 heads of marketing at fintech startups in India",
     "research Priya Sharma at Razorpay",
     "get me 20 founders running B2B SaaS in Bangalore",
-  ]
+  ];
   return (
     <div className="flex flex-col items-center text-center gap-4 py-12">
       <h2 className="text-2xl font-semibold tracking-tight">
@@ -1029,5 +1209,5 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
         ))}
       </div>
     </div>
-  )
+  );
 }
