@@ -26,7 +26,7 @@
 import type { PoolClient } from "pg"
 
 import { getPool } from "@/lib/db"
-import { insertOwnershipCheck, ownershipPredicate, RowSecurityError } from "./rls"
+import { insertOwnershipCheck, ownershipPredicate, RowSecurityError, writeDenied } from "./rls"
 
 export interface PgError {
   message: string
@@ -363,6 +363,14 @@ export class QueryBuilder<T = any> implements PromiseLike<Result<T[]>> {
 
   private async execute(): Promise<Result<unknown>> {
     try {
+      // Tables whose original policy was `for select` only. Checked
+      // before anything is built, so a user-scoped write never reaches
+      // the database at all.
+      if (this.userId && this.op !== "select") {
+        const denied = writeDenied(this.table)
+        if (denied) return { data: null, error: { message: denied, code: "42501" } }
+      }
+
       // INSERT/UPSERT ownership is a WITH CHECK, not a WHERE.
       if ((this.op === "insert" || this.op === "upsert") && this.userId) {
         const checked: Record<string, unknown>[] = []

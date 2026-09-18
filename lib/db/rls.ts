@@ -32,7 +32,7 @@
  *    commit. There is no policy engine left to catch you.
  */
 
-export type Ownership =
+type OwnershipShape =
   /** The row carries the owner directly: <column> = <userId>. */
   | { kind: "column"; column: string }
   /**
@@ -42,6 +42,22 @@ export type Ownership =
    *              and p.<parentOwner> = <userId>)
    */
   | { kind: "parent"; localKey: string; parentTable: string; parentKey: string; parentOwner: string }
+
+export type Ownership = OwnershipShape & {
+  /**
+   * The original policy was `for select` only — the owner may read the
+   * row but never write it, because the rows are produced by
+   * server-side code holding the service client (a webhook, a cron, a
+   * usage meter). Dropping this distinction would silently let a
+   * signed-in user forge their own audit trail.
+   *
+   * Enforced in lib/db/query-builder.ts, which refuses
+   * insert/upsert/update/delete on a read-only table for any
+   * user-scoped client. createAdminClient() is unaffected, which is
+   * exactly how the service role behaved under RLS.
+   */
+  readOnly?: true
+}
 
 /**
  * Transcribed 1:1 from the RLS policies in the Supabase schema.
@@ -109,6 +125,59 @@ export const OWNERSHIP: Record<string, Ownership> = {
     parentKey: "id",
     parentOwner: "user_id",
   },
+
+  // -------------------------------------------------------------------
+  // Ported from SalesEngAIMVP — transcribed from the `create policy`
+  // statements in its Supabase migrations, which db/migrations/
+  // 0003_salesengai.sql drops. Every one of them was
+  // `auth.uid() = user_id`; the three marked readOnly were
+  // `for select` rather than `for all`.
+  // -------------------------------------------------------------------
+
+  // own_customer_context — for all using(auth.uid()=user_id)
+  // user_id is the primary key here, not just a column.
+  customer_contexts: { kind: "column", column: "user_id" },
+
+  // own_playbook_examples — for all
+  playbook_examples: { kind: "column", column: "user_id" },
+
+  // own_voice_connections — for all. Holds encrypted_api_key, so a
+  // missing predicate here leaks a customer's Bolna credentials.
+  voice_connections: { kind: "column", column: "user_id" },
+
+  // own_voice_executions — for all. Holds call transcripts.
+  voice_executions: { kind: "column", column: "user_id" },
+
+  // "own gmail inbound events" — for SELECT only. Written by the
+  // detect-replies cron through the service client.
+  gmail_inbound_events: { kind: "column", column: "user_id", readOnly: true },
+
+  // "own qualification facts" — for all
+  lead_qualification_facts: { kind: "column", column: "user_id" },
+
+  // own_phone_suppressions — for all. A do-not-call list: treat a leak
+  // here as a compliance incident, not a data one.
+  phone_suppressions: { kind: "column", column: "user_id" },
+
+  // own_crm_connections — for all. Holds encrypted_credentials.
+  crm_connections: { kind: "column", column: "user_id" },
+
+  // own_crm_syncs — for all
+  crm_syncs: { kind: "column", column: "user_id" },
+
+  // own_ai_provider_connections — for all. Holds encrypted_api_key.
+  ai_provider_connections: { kind: "column", column: "user_id" },
+
+  // own_ai_preferences — for all. user_id is the primary key.
+  ai_preferences: { kind: "column", column: "user_id" },
+
+  // own_ai_usage_events — for SELECT only. This is the billing audit
+  // trail; the meter writes it with the service client.
+  ai_usage_events: { kind: "column", column: "user_id", readOnly: true },
+
+  // own_credit_packs — for SELECT only. Purchase history is written by
+  // the Stripe/Razorpay webhook, never by the signed-in user.
+  credit_packs: { kind: "column", column: "user_id", readOnly: true },
 }
 
 /**
@@ -191,4 +260,21 @@ export function insertOwnershipCheck(
     return { ok: false, reason: `row security: ${table}.${rule.localKey} is required` }
   }
   return { ok: true, row }
+}
+
+/**
+ * For a user-scoped client, is this table write-protected?
+ *
+ * Returns the refusal message when the table's original policy was
+ * `for select` only, and null when writing is allowed. Unknown tables
+ * are handled by ownershipPredicate / insertOwnershipCheck, which fail
+ * closed on their own.
+ */
+export function writeDenied(table: string): string | null {
+  const rule = OWNERSHIP[table]
+  if (!rule?.readOnly) return null
+  return (
+    `row security: ${table} is read-only for a signed-in user (the ` +
+    `original policy was "for select"). Write it with createAdminClient().`
+  )
 }
