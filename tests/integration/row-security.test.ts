@@ -42,7 +42,13 @@ describe("row security (real Postgres, no RLS)", { skip }, () => {
     await db.getPool().query(
       `truncate public.users, public.jobs, public.prospects, public.chat_sessions,
                public.prospect_candidates, public.credit_transactions,
-               public.campaigns, public.campaign_recipients cascade`,
+               public.campaigns, public.campaign_recipients,
+               public.customer_contexts, public.playbook_examples,
+               public.voice_connections, public.voice_executions,
+               public.lead_qualification_facts, public.phone_suppressions,
+               public.crm_connections, public.crm_syncs,
+               public.ai_provider_connections, public.ai_preferences,
+               public.ai_usage_events, public.credit_packs cascade`,
     )
 
     ALICE = (await auth.signUp("alice@test.in", "correct horse battery")).user.id
@@ -127,6 +133,172 @@ describe("row security (real Postgres, no RLS)", { skip }, () => {
     })
     it("refuses a child row under another tenant's parent", async () => {
       const r = await alice.from("prospects").insert({ job_id: jobM, input_source: "chat_search" })
+      assert.notEqual(r.error, null)
+    })
+  })
+
+  describe("ported SalesEngAI tables", () => {
+    // Every table 0003_salesengai.sql adds arrived with an RLS policy
+    // that no longer exists. These assert the replacement holds — and
+    // in particular that the three secret-bearing ones do, because a
+    // gap there hands over a customer's Bolna, CRM or AI credentials.
+
+    it("a voice connection is invisible to another tenant", async () => {
+      const ins = await admin.from("voice_connections").insert({
+        user_id: ALICE, agent_id: "agent-a", encrypted_api_key: "cipher-a",
+      }).select("id").single()
+      assert.equal(ins.error, null)
+      assert.equal((await mallory.from("voice_connections").select("*")).data.length, 0)
+      assert.equal((await alice.from("voice_connections").select("*")).data.length, 1)
+    })
+
+    it("a CRM connection is invisible to another tenant", async () => {
+      await admin.from("crm_connections").insert({
+        user_id: ALICE, provider: "hubspot", encrypted_credentials: "cipher-a",
+      })
+      assert.equal((await mallory.from("crm_connections").select("*")).data.length, 0)
+      assert.equal((await alice.from("crm_connections").select("*")).data.length, 1)
+    })
+
+    it("an AI provider key is invisible to another tenant", async () => {
+      await admin.from("ai_provider_connections").insert({
+        user_id: ALICE, provider: "openai", encrypted_api_key: "cipher-a",
+      })
+      assert.equal((await mallory.from("ai_provider_connections").select("*")).data.length, 0)
+    })
+
+    it("customer_contexts is keyed on user_id and still scoped", async () => {
+      await admin.from("customer_contexts").insert({ user_id: ALICE, company_name: "AcmeCo" })
+      await admin.from("customer_contexts").insert({ user_id: MALLORY, company_name: "MalCo" })
+      const seen = (await alice.from("customer_contexts").select("company_name")).data
+      assert.deepEqual(seen.map((r: any) => r.company_name), ["AcmeCo"])
+    })
+
+    it("a phone suppression list does not leak across tenants", async () => {
+      await admin.from("phone_suppressions").insert({
+        user_id: ALICE, phone_hash: "hash-a", reason: "do_not_call",
+      })
+      assert.equal((await mallory.from("phone_suppressions").select("*")).data.length, 0)
+    })
+
+    it("an omitted user_id is stamped with the session user", async () => {
+      const r = await alice.from("playbook_examples")
+        .insert({ example_type: "email", title: "T", content: "C" })
+        .select("user_id").single()
+      assert.equal(r.data.user_id, ALICE)
+    })
+
+    it("refuses a qualification fact owned by someone else", async () => {
+      const r = await alice.from("lead_qualification_facts").insert({
+        user_id: MALLORY, prospect_id: pM, fact_key: "interest",
+        fact_value: "yes", source_type: "reply", confidence: 0.9,
+      })
+      assert.notEqual(r.error, null)
+    })
+  })
+
+  describe("read-only tables (policies that were `for select`)", () => {
+    // These three are the billing and audit trail. The owner reads
+    // them; only the service client writes them. If a signed-in user
+    // could insert here they could forge their own usage history.
+
+    it("the owner can read their usage events", async () => {
+      await admin.from("ai_usage_events").insert({
+        user_id: ALICE, provider: "openai", model: "gpt-4o-mini",
+        operation: "extract", status: "completed",
+      })
+      assert.equal((await alice.from("ai_usage_events").select("*")).data.length, 1)
+    })
+
+    it("...and another tenant cannot", async () => {
+      assert.equal((await mallory.from("ai_usage_events").select("*")).data.length, 0)
+    })
+
+    it("a signed-in user cannot forge a usage event", async () => {
+      const r = await alice.from("ai_usage_events").insert({
+        user_id: ALICE, provider: "openai", model: "gpt-4o-mini",
+        operation: "extract", status: "completed",
+      })
+      assert.notEqual(r.error, null)
+      assert.equal(r.error.code, "42501")
+    })
+
+    it("a signed-in user cannot grant themselves a credit pack", async () => {
+      const r = await alice.from("credit_packs").insert({
+        user_id: ALICE, pack_id: "pack_6000", credits_added: 6000,
+      })
+      assert.notEqual(r.error, null)
+      assert.equal(r.error.code, "42501")
+    })
+
+    it("a signed-in user cannot delete their usage history", async () => {
+      const r = await alice.from("ai_usage_events").delete().eq("user_id", ALICE)
+      assert.notEqual(r.error, null)
+      assert.equal(r.error.code, "42501")
+    })
+
+    it("...but the service client writes all three normally", async () => {
+      assert.equal((await admin.from("credit_packs").insert({
+        user_id: ALICE, pack_id: "pack_500", credits_added: 500,
+      })).error, null)
+    })
+  })
+
+  describe(".or() — the PostgREST disjunction filter", () => {
+    // Added for the SalesEngAI agent port, whose search_leads handler
+    // calls .or(`input_name.ilike.%${term}%,email.ilike.%${term}%`).
+    // That term comes from an agent tool call, so it ultimately comes
+    // from chat input. These assert it is parameterised, not spliced.
+
+    it("matches on either branch", async () => {
+      const r = await alice.from("prospects")
+        .select("id,input_company")
+        .or("input_company.ilike.%Acme%,input_company.ilike.%Nothing%")
+      assert.equal(r.error, null)
+      assert.equal(r.data.length, 1)
+    })
+
+    it("is still ownership-filtered — the other tenant's row never matches", async () => {
+      const r = await alice.from("prospects")
+        .select("id,input_company")
+        .or("input_company.ilike.%Acme%,input_company.ilike.%MalCo%")
+      assert.equal(r.error, null)
+      assert.deepEqual(r.data.map((x: any) => x.input_company), ["AcmeCo"])
+    })
+
+    it("treats a quote as data, not syntax", async () => {
+      // If the term were concatenated into SQL this would be a syntax
+      // error or worse. Parameterised, it is simply a search for a
+      // company nobody is called.
+      const evil = "%' or '1'='1"
+      const r = await alice.from("prospects")
+        .select("id")
+        .or(`input_company.ilike.%${evil}%,email.ilike.%${evil}%`)
+      assert.equal(r.error, null)
+      assert.equal(r.data.length, 0)
+    })
+
+    it("a comment-injection attempt cannot truncate the ownership predicate", async () => {
+      const evil = "x%'; drop table public.prospects; --"
+      const r = await alice.from("prospects").select("id").or(`input_company.ilike.%${evil}%`)
+      assert.equal(r.error, null)
+      assert.equal(r.data.length, 0)
+      // The table is still there.
+      assert.equal((await admin.from("prospects").select("id")).error, null)
+    })
+
+    it("rejects a column name that is not a plain identifier", async () => {
+      const r = await alice.from("prospects").select("id").or('"a"."b".eq.1')
+      assert.notEqual(r.error, null)
+    })
+
+    it("rejects an unknown operator rather than passing it through", async () => {
+      const r = await alice.from("prospects").select("id").or("input_company.matches.x")
+      assert.notEqual(r.error, null)
+    })
+
+    it("rejects a nested group", async () => {
+      const r = await alice.from("prospects").select("id").or("and(a.eq.1,b.eq.2)")
       assert.notEqual(r.error, null)
     })
   })

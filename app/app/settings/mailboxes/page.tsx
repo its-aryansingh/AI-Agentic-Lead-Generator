@@ -5,8 +5,12 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { warmupCap } from "@/lib/providers/gmail"
+import { warmupCap, revokeGmailCredential, sendGmail, verifyGmailCredential, classifyGmailError } from "@/lib/providers/gmail"
+import { decryptCredential } from "@/lib/credential-crypto"
 
+
+// Kept from the pre-port version: every page under /app reads the
+// session cookie and cannot be statically prerendered.
 export const dynamic = "force-dynamic"
 
 /**
@@ -27,11 +31,12 @@ async function savePhysicalAddress(formData: FormData) {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) redirect("/login")
-  await supabase
+  const {error}=await supabase
     .from("mailboxes")
     .update({ physical_address: addr || null })
     .eq("id", id)
     .eq("user_id", user.id)
+  if(error)redirect(`/app/settings/mailboxes?error=address_save_failed`)
   redirect("/app/settings/mailboxes?saved=1")
 }
 
@@ -44,18 +49,44 @@ async function disconnect(formData: FormData) {
     data: { user },
   } = await supabase.auth.getUser()
   if (!user) redirect("/login")
+  const {data:mailbox}=await supabase.from("mailboxes").select("oauth_refresh_token_encrypted").eq("id",id).eq("user_id",user.id).maybeSingle()
+  if(mailbox?.oauth_refresh_token_encrypted){
+    try{await revokeGmailCredential(decryptCredential(mailbox.oauth_refresh_token_encrypted as string))}catch{/* Always finish the local disconnect. */}
+  }
   await supabase
     .from("mailboxes")
-    .update({ status: "disconnected" })
+    .update({ status: "disconnected", oauth_refresh_token_encrypted: null, oauth_refresh_token: null, disconnected_at: new Date().toISOString() })
     .eq("id", id)
     .eq("user_id", user.id)
   redirect("/app/settings/mailboxes")
 }
 
+async function testMailbox(formData: FormData) {
+  "use server"
+  const id=String(formData.get("mailbox_id")??"")
+  const supabase=await createClient()
+  const {data:{user}}=await supabase.auth.getUser()
+  if(!user)redirect("/login")
+  const {data:mailbox}=await supabase.from("mailboxes").select("email_address,oauth_refresh_token_encrypted").eq("id",id).eq("user_id",user.id).maybeSingle()
+  if(!mailbox?.oauth_refresh_token_encrypted)redirect("/app/settings/mailboxes?error=reconnect_required")
+  try {
+    const token=decryptCredential(mailbox.oauth_refresh_token_encrypted as string)
+    const email=await verifyGmailCredential(token)
+    if(email.toLowerCase()!==String(mailbox.email_address).toLowerCase())throw new Error("MAILBOX_MISMATCH")
+    await sendGmail({refreshToken:token,from:email,to:email,subject:"SalesEngAI mailbox verification",body:"Your Gmail connection is working. This controlled message was sent only to your connected mailbox."})
+    await supabase.from("mailboxes").update({status:"active",last_verified_at:new Date().toISOString(),last_error_code:null,last_error_message:null}).eq("id",id).eq("user_id",user.id)
+  } catch(error) {
+    const code=classifyGmailError(error)
+    await supabase.from("mailboxes").update({status:code==="auth"?"reconnect_required":"error",last_error_code:code,last_error_message:"Mailbox verification failed"}).eq("id",id).eq("user_id",user.id)
+    redirect(`/app/settings/mailboxes?error=${code}`)
+  }
+  redirect("/app/settings/mailboxes?tested=1")
+}
+
 export default async function MailboxesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ connected?: string; error?: string; saved?: string }>
+  searchParams: Promise<{ connected?: string; error?: string; saved?: string; tested?: string }>
 }) {
   const supabase = await createClient()
   const { data: mailboxes } = await supabase
@@ -65,12 +96,12 @@ export default async function MailboxesPage({
     )
     .order("created_at", { ascending: false })
 
-  const { connected, error } = await searchParams
+  const { connected, error, tested, saved } = await searchParams
 
   return (
     <div className="flex-1 flex flex-col">
-      <header className="px-6 py-5 border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-10">
-        <h1 className="text-xl font-semibold tracking-tight">Sending mailboxes</h1>
+      <header className="px-6 py-4 border-b border-border">
+        <h1 className="text-base font-semibold">Sending mailboxes</h1>
       </header>
 
       <section className="flex-1 overflow-y-auto px-6 py-6">
@@ -83,6 +114,8 @@ export default async function MailboxesPage({
               </CardContent>
             </Card>
           )}
+          {tested && <Card size="sm" className="bg-emerald-50 dark:bg-emerald-950/30"><CardContent className="py-3 text-sm">Mailbox verified and a controlled test email was sent to itself.</CardContent></Card>}
+          {saved && <Card size="sm" className="bg-emerald-50 dark:bg-emerald-950/30"><CardContent className="py-3 text-sm">Physical address saved. Gmail authorization was not changed.</CardContent></Card>}
           {error && (
             <Card size="sm">
               <CardContent className="py-3 text-sm text-destructive">
@@ -93,14 +126,11 @@ export default async function MailboxesPage({
             </Card>
           )}
 
-          <Card className="glass-card shadow-sm border-primary/10">
-            <CardHeader className="px-6 py-5 bg-muted/20 border-b border-border/50">
-              <CardTitle className="text-base font-medium flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path></svg>
-                Connect a mailbox
-              </CardTitle>
+          <Card size="sm">
+            <CardHeader className="px-4">
+              <CardTitle>Connect a mailbox</CardTitle>
             </CardHeader>
-            <CardContent className="p-6 flex flex-col gap-4">
+            <CardContent className="flex flex-col gap-3">
               <p className="text-sm text-muted-foreground">
                 Connect a Gmail account to send sequences from. We request{" "}
                 <code className="font-mono text-xs">gmail.send</code> +{" "}
@@ -121,24 +151,20 @@ export default async function MailboxesPage({
               (m.daily_send_limit as number) ?? 10,
             )
             return (
-              <Card key={m.id as string} className="glass-card overflow-hidden">
-                <CardHeader className="px-5 py-4 border-b border-border/50 bg-muted/10">
-                  <CardTitle className="flex items-center gap-3 text-base">
-                    <div className="p-1.5 rounded-md bg-background border border-border/50 shadow-sm">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-muted-foreground"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
-                    </div>
+              <Card key={m.id as string} size="sm">
+                <CardHeader className="px-4">
+                  <CardTitle className="flex items-center gap-2">
                     {m.email_address as string}
                     <Badge
                       variant={
                         m.status === "active" ? "default" : "secondary"
                       }
-                      className="ml-auto"
                     >
                       {String(m.status)}
                     </Badge>
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-4 px-5 py-5 text-sm">
+                <CardContent className="flex flex-col gap-3 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Today&apos;s sends</span>
                     <span className="font-medium">
@@ -161,6 +187,9 @@ export default async function MailboxesPage({
                       Save
                     </Button>
                   </form>
+                  {m.status === "active" && (
+                    <form action={testMailbox} className="self-end"><input type="hidden" name="mailbox_id" value={m.id as string} /><Button type="submit" size="xs" variant="outline">Verify &amp; send test</Button></form>
+                  )}
                   {m.status === "active" && (
                     <form action={disconnect} className="self-end">
                       <input type="hidden" name="mailbox_id" value={m.id as string} />

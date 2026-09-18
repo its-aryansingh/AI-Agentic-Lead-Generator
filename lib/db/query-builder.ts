@@ -26,7 +26,7 @@
 import type { PoolClient } from "pg"
 
 import { getPool } from "@/lib/db"
-import { insertOwnershipCheck, ownershipPredicate, RowSecurityError } from "./rls"
+import { insertOwnershipCheck, ownershipPredicate, RowSecurityError, writeDenied } from "./rls"
 
 export interface PgError {
   message: string
@@ -42,6 +42,84 @@ export interface Result<T> {
 }
 
 type Op = "select" | "insert" | "update" | "upsert" | "delete"
+
+/**
+ * Operators PostgREST spells with words. Only these are accepted; an
+ * unknown one is an error rather than a passthrough, so a typo can
+ * never become raw SQL.
+ */
+const OR_OPERATORS: Record<string, string> = {
+  eq: "=",
+  neq: "<>",
+  gt: ">",
+  gte: ">=",
+  lt: "<",
+  lte: "<=",
+  like: "like",
+  ilike: "ilike",
+}
+
+const PLAIN_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * Turns `a.eq.1,b.ilike.%x%` into `("t"."a" = $1 or "t"."b" ilike $2)`,
+ * registering every value as a bound parameter via `push`.
+ */
+function renderOrExpression(
+  table: string,
+  expression: string,
+  push: (value: unknown) => string,
+): string {
+  if (expression.includes("(") || expression.includes(")")) {
+    throw new Error(
+      `or(): nested groups are not supported — got ${JSON.stringify(expression)}`,
+    )
+  }
+
+  const parts: string[] = []
+  for (const raw of expression.split(",")) {
+    const term = raw.trim()
+    if (!term) continue
+
+    // column.operator.value — the value may itself contain dots.
+    const first = term.indexOf(".")
+    const second = term.indexOf(".", first + 1)
+    if (first <= 0 || second < 0) {
+      throw new Error(`or(): cannot parse term ${JSON.stringify(term)}`)
+    }
+
+    const column = term.slice(0, first)
+    const op = term.slice(first + 1, second)
+    let value: string = term.slice(second + 1)
+
+    if (!PLAIN_IDENT.test(column)) {
+      throw new Error(`or(): ${JSON.stringify(column)} is not a plain column name`)
+    }
+
+    const col = `"${table}"."${column}"`
+
+    if (op === "is") {
+      if (value === "null") { parts.push(`${col} is null`); continue }
+      if (value === "true" || value === "false") { parts.push(`${col} is ${value}`); continue }
+      throw new Error(`or(): is.${value} is not null/true/false`)
+    }
+
+    const sqlOp = OR_OPERATORS[op]
+    if (!sqlOp) throw new Error(`or(): unsupported operator ${JSON.stringify(op)}`)
+
+    // PostgREST writes wildcards as *; SQL wants %.
+    if (op === "like" || op === "ilike") value = value.replace(/\*/g, "%")
+    // PostgREST allows "quoted values" to protect commas and dots.
+    if (value.length > 1 && value.startsWith('"') && value.endsWith('"')) {
+      value = value.slice(1, -1)
+    }
+
+    parts.push(`${col} ${sqlOp} ${push(value)}`)
+  }
+
+  if (parts.length === 0) throw new Error("or(): no usable terms")
+  return `(${parts.join(" or ")})`
+}
 
 interface Filter {
   column: string
@@ -181,6 +259,22 @@ export class QueryBuilder<T = any> implements PromiseLike<Result<T[]>> {
   like(column: string, pattern: string): this { return this.push(column, "like", pattern) }
   ilike(column: string, pattern: string): this { return this.push(column, "ilike", pattern) }
   in(column: string, values: unknown[]): this { return this.push(column, "in", values) }
+
+  /**
+   * PostgREST's .or("a.eq.1,b.ilike.%x%") — a disjunction of filters.
+   *
+   * The string is PARSED into columns, operators and bound parameters,
+   * never spliced into SQL. That matters here more than anywhere else
+   * in this file: the only call sites interpolate a search term that
+   * originates in an agent tool call, i.e. ultimately from chat input.
+   * Concatenating it would be a SQL injection with a language model
+   * holding the needle.
+   *
+   * Anything this cannot parse — a nested group, an unknown operator,
+   * a column name that is not a plain identifier — throws at build
+   * time and surfaces as a query error. Fails closed, like rls.ts.
+   */
+  or(expression: string): this { return this.push("", "__or", expression) }
   contains(column: string, value: unknown): this { return this.push(column, "@>", value) }
 
   is(column: string, value: null | boolean): this {
@@ -244,6 +338,10 @@ export class QueryBuilder<T = any> implements PromiseLike<Result<T[]>> {
     // rejects with "could not determine data type of parameter $1".
     const where: string[] = []
     if (this.op !== "update") for (const f of this.filters) {
+      if (f.operator === "__or") {
+        where.push(renderOrExpression(this.table, f.value as string, p))
+        continue
+      }
       const col = f.column.includes(".") ? quoteIdent(f.column) : `"${this.table}"."${f.column}"`
       if (f.operator === "in") {
         const list = (f.value as unknown[]) ?? []
@@ -330,6 +428,10 @@ export class QueryBuilder<T = any> implements PromiseLike<Result<T[]>> {
         // Re-derive WHERE: the SET params must be registered first.
         const where2: string[] = []
         for (const f of this.filters) {
+          if (f.operator === "__or") {
+            where2.push(renderOrExpression(this.table, f.value as string, p))
+            continue
+          }
           const col = f.column.includes(".") ? quoteIdent(f.column) : `"${this.table}"."${f.column}"`
           if (f.operator === "in") {
             const list = (f.value as unknown[]) ?? []
@@ -363,6 +465,14 @@ export class QueryBuilder<T = any> implements PromiseLike<Result<T[]>> {
 
   private async execute(): Promise<Result<unknown>> {
     try {
+      // Tables whose original policy was `for select` only. Checked
+      // before anything is built, so a user-scoped write never reaches
+      // the database at all.
+      if (this.userId && this.op !== "select") {
+        const denied = writeDenied(this.table)
+        if (denied) return { data: null, error: { message: denied, code: "42501" } }
+      }
+
       // INSERT/UPSERT ownership is a WITH CHECK, not a WHERE.
       if ((this.op === "insert" || this.op === "upsert") && this.userId) {
         const checked: Record<string, unknown>[] = []

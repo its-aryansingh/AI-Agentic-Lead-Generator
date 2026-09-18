@@ -1,8 +1,7 @@
-"use client"
+"use client";
 
-import * as React from "react"
-import Link from "next/link"
-import { usePathname } from "next/navigation"
+import * as React from "react";
+import Link from "next/link";
 
 import {
   MessageSquarePlus,
@@ -13,40 +12,60 @@ import {
   Eye,
   BarChart3,
   Mic,
+  Phone,
   Mail,
-  Settings,
   CreditCard,
   Repeat,
   Bell,
   Shield,
-} from "lucide-react"
-import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
-import { signOut } from "../actions"
+  UserPlus,
+  BookOpenText,
+  Database,
+  ShieldCheck,
+  Sparkles,
+  Activity,
+  Trash2,
+} from "lucide-react";
+import { useRouter, usePathname } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { signOut, deleteChatSession } from "@/app/app/actions";
 
 export interface SidebarSession {
-  id: string
-  title: string | null
+  id: string;
+  title: string | null;
 }
 
 type NavItem = {
-  href: string
-  label: string
-  icon: React.ComponentType<{ className?: string }>
-  exactOnly?: boolean
-  className?: string
-}
+  href: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  exactOnly?: boolean;
+  className?: string;
+};
 
 type NavSection = {
-  heading: string
-  items: NavItem[]
-}
+  heading: string;
+  items: NavItem[];
+};
 
 const NAV_SECTIONS: NavSection[] = [
   {
     heading: "CORE",
     items: [
-      { href: "/app/chat", label: "+ New chat", icon: MessageSquarePlus, exactOnly: true, className: "font-medium" },
+      { href: "/app/leads", label: "Lead intake", icon: UserPlus },
+      {
+        href: "/app/settings/context",
+        label: "Context & playbook",
+        icon: BookOpenText,
+      },
+      {
+        href: "/app/chat",
+        label: "+ New chat",
+        icon: MessageSquarePlus,
+        exactOnly: true,
+        className: "font-medium",
+      },
       { href: "/app/jobs", label: "Jobs", icon: Briefcase },
     ],
   },
@@ -62,26 +81,48 @@ const NAV_SECTIONS: NavSection[] = [
   },
   {
     heading: "INSIGHTS",
-    items: [
-      { href: "/app/analytics", label: "Analytics", icon: BarChart3 },
-    ],
+    items: [{ href: "/app/analytics", label: "Analytics", icon: BarChart3 }],
   },
   {
     heading: "SETTINGS",
     items: [
       { href: "/app/settings/voice", label: "Voice anchor", icon: Mic },
+      {
+        href: "/app/settings/voice-calling",
+        label: "Voice calling",
+        icon: Phone,
+      },
       { href: "/app/settings/mailboxes", label: "Mailboxes", icon: Mail },
-      { href: "/app/settings/providers", label: "Providers", icon: Settings },
-      { href: "/app/settings/notifications", label: "Notifications", icon: Bell },
+      { href: "/app/settings/crm", label: "CRM connections", icon: Database },
+      {
+        href: "/app/settings/providers",
+        label: "AI Models",
+        icon: Sparkles,
+      },
+      {
+        href: "/app/settings/usage",
+        label: "Compute Usage",
+        icon: Activity,
+      },
+      {
+        href: "/app/settings/billing",
+        label: "Billing & Packs",
+        icon: CreditCard,
+      },
+      {
+        href: "/app/settings/readiness",
+        label: "Pilot readiness",
+        icon: ShieldCheck,
+      },
+      {
+        href: "/app/settings/notifications",
+        label: "Notifications",
+        icon: Bell,
+      },
       { href: "/app/settings/privacy", label: "Privacy & DPDP", icon: Shield },
-      { href: "/app/settings/billing", label: "Billing & Plans", icon: CreditCard },
     ],
   },
-]
-
-function getInitials(email: string) {
-  return email.substring(0, 2).toUpperCase()
-}
+];
 
 /**
  * App shell with a mobile-drawer sidebar.
@@ -97,19 +138,60 @@ function getInitials(email: string) {
  */
 export function AppShell({
   email,
-  sessions,
+  sessions: initialSessions,
   children,
 }: {
-  email: string
-  sessions: SidebarSession[]
-  children: React.ReactNode
+  email: string;
+  sessions: SidebarSession[];
+  children: React.ReactNode;
 }) {
-  const [open, setOpen] = React.useState(false)
-  const pathname = usePathname()
-  const close = React.useCallback(() => setOpen(false), [])
+  const [open, setOpen] = React.useState(false);
+  const [deletedSessionIds, setDeletedSessionIds] = React.useState<Set<string>>(
+    new Set(),
+  );
+  const [deletingId, setDeletingId] = React.useState<string | null>(null);
+  const pathname = usePathname();
+  const router = useRouter();
+  const close = React.useCallback(() => setOpen(false), []);
+
+  const sessions = React.useMemo(() => {
+    return initialSessions.filter((s) => !deletedSessionIds.has(s.id));
+  }, [initialSessions, deletedSessionIds]);
+
+  async function handleDeleteChat(e: React.MouseEvent, sessionId: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (deletingId) return;
+
+    setDeletingId(sessionId);
+    // Optimistic removal
+    setDeletedSessionIds((prev) => new Set(prev).add(sessionId));
+
+    try {
+      const res = await deleteChatSession(sessionId);
+      if (!res?.success) {
+        setDeletedSessionIds((prev) => {
+          const next = new Set(prev);
+          next.delete(sessionId);
+          return next;
+        });
+      } else if (pathname === `/app/chat/${sessionId}`) {
+        router.push("/app/chat");
+      }
+      router.refresh();
+    } catch {
+      setDeletedSessionIds((prev) => {
+        const next = new Set(prev);
+        next.delete(sessionId);
+        return next;
+      });
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   return (
-    <div className="min-h-screen flex">
+    <div className="h-screen flex overflow-hidden">
       {/* Mobile top bar — hidden on md+ where the aside is always visible. */}
       <div className="md:hidden fixed top-0 left-0 right-0 z-30 flex items-center justify-between bg-card border-b border-border px-4 py-3">
         <button
@@ -120,10 +202,14 @@ export function AppShell({
         >
           <Hamburger />
         </button>
-        <Link href="/app/chat" className="font-semibold tracking-tight">
-          LeadGenAI
+        <Link
+          href="/app/chat"
+          className="font-bold text-base tracking-tight text-black dark:text-white"
+        >
+          Aravya SalesEngAI
         </Link>
-        <div className="w-7" />{/* keeps the title centered */}
+        <div className="w-7" />
+        {/* keeps the title centered */}
       </div>
 
       {/* Off-canvas overlay on mobile. */}
@@ -138,7 +224,7 @@ export function AppShell({
 
       <aside
         className={cn(
-          "w-60 border-r border-border bg-card flex flex-col",
+          "w-60 border-r border-border bg-card flex flex-col h-full shrink-0",
           // Mobile: off-canvas drawer
           "fixed inset-y-0 left-0 z-50 transition-transform md:translate-x-0",
           open ? "translate-x-0" : "-translate-x-full",
@@ -146,9 +232,12 @@ export function AppShell({
           "md:static md:translate-x-0",
         )}
       >
-        <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-          <Link href="/app/chat" className="font-semibold tracking-tight">
-            LeadGenAI
+        <div className="px-5 py-4 border-b border-border flex items-center justify-between shrink-0">
+          <Link
+            href="/app/chat"
+            className="font-bold text-base tracking-tight text-black dark:text-white hover:opacity-90 transition-opacity"
+          >
+            Aravya SalesEngAI
           </Link>
           <button
             type="button"
@@ -160,77 +249,95 @@ export function AppShell({
           </button>
         </div>
 
-        <nav className="px-3 py-3 flex flex-col gap-3 text-sm border-b border-border">
-          {NAV_SECTIONS.map((section) => (
-            <div key={section.heading} className="flex flex-col gap-0.5">
-              <div className="px-3 pb-1 text-[10px] uppercase tracking-widest text-muted-foreground select-none">
-                {section.heading}
+        <div className="flex-1 overflow-y-auto min-h-0 flex flex-col">
+          <nav className="px-3 py-3 flex flex-col gap-3 text-sm border-b border-border">
+            {NAV_SECTIONS.map((section) => (
+              <div key={section.heading} className="flex flex-col gap-0.5">
+                <div className="px-3 pb-1 text-[10px] uppercase tracking-widest text-muted-foreground select-none">
+                  {section.heading}
+                </div>
+                {section.items.map((item) => (
+                  <SidebarLink
+                    key={item.href}
+                    href={item.href}
+                    pathname={pathname}
+                    onNavigate={close}
+                    icon={item.icon}
+                    exactOnly={item.exactOnly}
+                    className={item.className}
+                  >
+                    {item.label}
+                  </SidebarLink>
+                ))}
               </div>
-              {section.items.map((item) => (
-                <SidebarLink
-                  key={item.href}
-                  href={item.href}
-                  pathname={pathname}
-                  onNavigate={close}
-                  icon={item.icon}
-                  exactOnly={item.exactOnly}
-                  className={item.className}
-                >
-                  {item.label}
-                </SidebarLink>
-              ))}
-            </div>
-          ))}
-        </nav>
+            ))}
+          </nav>
 
-        <div className="flex-1 px-3 py-3 overflow-y-auto flex flex-col gap-0.5">
-          <div className="px-3 text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
-            Recent chats
-          </div>
-          {sessions.length === 0 && (
-            <div className="px-3 text-xs text-muted-foreground">
-              No chats yet.
+          <div className="px-3 py-3 flex flex-col gap-0.5">
+            <div className="px-3 text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+              Recent chats
             </div>
-          )}
-          {sessions.map((s) => (
-            <SidebarLink
-              key={s.id}
-              href={`/app/chat/${s.id}`}
-              pathname={pathname}
-              onNavigate={close}
-              className="text-xs truncate"
-              title={s.title ?? "Untitled chat"}
-            >
-              {s.title || "Untitled chat"}
-            </SidebarLink>
-          ))}
+            {sessions.length === 0 && (
+              <div className="px-3 text-xs text-muted-foreground">
+                No chats yet.
+              </div>
+            )}
+            {sessions.map((s) => {
+              const active = pathname === `/app/chat/${s.id}`;
+              return (
+                <div
+                  key={s.id}
+                  className={cn(
+                    "group flex items-center justify-between rounded-md transition-colors",
+                    active
+                      ? "bg-muted text-foreground border-l-3 border-l-primary"
+                      : "hover:bg-muted text-foreground",
+                  )}
+                >
+                  <Link
+                    href={`/app/chat/${s.id}`}
+                    onClick={close}
+                    title={s.title ?? "Untitled chat"}
+                    className="flex-1 px-3 py-2 text-xs truncate"
+                  >
+                    {s.title || "Untitled chat"}
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={(e) => handleDeleteChat(e, s.id)}
+                    title="Delete chat"
+                    disabled={deletingId === s.id}
+                    className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1.5 mr-1 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-opacity"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         </div>
 
-        <div className="p-4 border-t border-border flex items-center justify-between gap-2">
-          <div className="flex items-center gap-3 overflow-hidden">
-            <div className="size-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold shrink-0">
-              {getInitials(email)}
-            </div>
-            <span className="text-xs text-muted-foreground truncate font-medium">{email}</span>
-          </div>
+        <div className="px-3 py-4 border-t border-border flex flex-col gap-2 text-xs shrink-0">
+          <span className="px-3 text-muted-foreground truncate">{email}</span>
           <form action={signOut}>
             <Button
               variant="ghost"
-              size="icon"
+              size="sm"
               type="submit"
-              title="Sign out"
-              className="size-8 text-muted-foreground hover:text-foreground shrink-0"
+              className="w-full justify-start"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+              Sign out
             </Button>
           </form>
         </div>
       </aside>
 
       {/* Main content. Top padding on mobile accounts for the fixed top bar. */}
-      <main className="flex-1 flex flex-col pt-12 md:pt-0">{children}</main>
+      <main className="flex-1 flex flex-col pt-12 md:pt-0 overflow-y-auto min-w-0">
+        {children}
+      </main>
     </div>
-  )
+  );
 }
 
 function SidebarLink({
@@ -243,18 +350,18 @@ function SidebarLink({
   title,
   children,
 }: {
-  href: string
-  pathname: string
-  onNavigate?: () => void
-  icon?: React.ComponentType<{ className?: string }>
-  exactOnly?: boolean
-  className?: string
-  title?: string
-  children: React.ReactNode
+  href: string;
+  pathname: string;
+  onNavigate?: () => void;
+  icon?: React.ComponentType<{ className?: string }>;
+  exactOnly?: boolean;
+  className?: string;
+  title?: string;
+  children: React.ReactNode;
 }) {
   const active = exactOnly
     ? pathname === href
-    : pathname === href || pathname.startsWith(href + "/")
+    : pathname === href || pathname.startsWith(href + "/");
 
   return (
     <Link
@@ -262,20 +369,17 @@ function SidebarLink({
       title={title}
       onClick={onNavigate}
       className={cn(
-        "px-3 py-2 rounded-md transition-all flex items-center gap-2",
+        "px-3 py-2 rounded-md transition-colors flex items-center gap-2",
         active
-          ? "bg-muted/50 text-foreground sidebar-active-accent"
-          : "hover:bg-muted text-muted-foreground hover:text-foreground",
+          ? "bg-muted text-foreground border-l-3 border-l-primary"
+          : "hover:bg-muted text-foreground",
         className,
       )}
     >
-      {Icon && <Icon className={cn("size-4 shrink-0 transition-colors", active ? "text-primary" : "")} />}
-      <span className="truncate">{children}</span>
-      {(href === "/app/inbox" || href === "/app/automations") && (
-        <span className="ml-auto size-1.5 rounded-full bg-primary/80 animate-pulse-dot" />
-      )}
+      {Icon && <Icon className="size-4 shrink-0" />}
+      {children}
     </Link>
-  )
+  );
 }
 
 function Hamburger() {
@@ -292,5 +396,5 @@ function Hamburger() {
     >
       <path d="M4 6h16M4 12h16M4 18h16" />
     </svg>
-  )
+  );
 }

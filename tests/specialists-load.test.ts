@@ -29,7 +29,14 @@ describe('Specialist Agents Under Load: Concurrent Orchestration Stress Test', (
     const researcher = SPECIALIST_META['researcher'];
     assert.ok(researcher, 'Should find researcher');
     assert.ok(researcher.maxSteps, 'Should have maxSteps limit');
-    assert.ok(researcher.maxSteps <= 4, 'Researcher steps should be bounded');
+    // Raised 4 -> 6 by the SalesEngAIMVP port, deliberately: discovery
+    // returns five results by default, so the researcher needs one
+    // enrichment step per prospect plus a final synthesis step. The
+    // point of this assertion is that the budget is BOUNDED and sized
+    // to that sample, not that it is any particular number -- so it is
+    // pinned to exactly 6 rather than loosened to an open ceiling.
+    // If discovery's sample size changes, change both together.
+    assert.equal(researcher.maxSteps, 6, 'Researcher steps should be 5 prospects + 1 synthesis');
   });
 
   test('specialist: copywriter has higher token limit for drafting', () => {

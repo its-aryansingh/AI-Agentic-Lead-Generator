@@ -1,7 +1,7 @@
-'use server'
+"use server";
 
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
 
 /**
  * Server actions for the app shell.
@@ -9,37 +9,78 @@ import { createClient } from '@/lib/supabase/server'
  */
 
 export async function signOut() {
-  const supabase = await createClient()
-  await supabase.auth.signOut()
-  redirect('/login')
+  const supabase = await createClient();
+  await supabase.auth.signOut();
+  redirect("/login");
 }
 
 export async function updateRecipientStatus(id: string, newStatus: string) {
-  const validStatuses = ['scheduled', 'sent', 'opened', 'replied', 'bounced', 'unsubscribed']
-  if (!validStatuses.includes(newStatus)) return { error: 'Invalid status' }
-  
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Not authenticated' }
-  
+  const validStatuses = [
+    "scheduled",
+    "sent",
+    "opened",
+    "replied",
+    "bounced",
+    "unsubscribed",
+  ];
+  if (!validStatuses.includes(newStatus)) return { error: "Invalid status" };
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not authenticated" };
+
   const { error } = await supabase
-    .from('campaign_recipients')
+    .from("campaign_recipients")
     .update({ status: newStatus })
-    .eq('id', id)
-  
-  if (error) return { error: error.message }
-  return { success: true }
+    .eq("id", id);
+
+  if (error) return { error: error.message };
+  return { success: true };
 }
 
 export async function markHandled(formData: FormData) {
-  const id = String(formData.get("id") ?? "")
-  if (!id) return
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Not authenticated' }
+  const id = String(formData.get("id") ?? "");
+  if (!id) return;
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not authenticated" };
   await supabase
     .from("reply_classifications")
     .update({ handled: true })
-    .eq("id", id)
-  return { success: true }
+    .eq("id", id);
+  return { success: true };
+}
+
+export async function deleteChatSession(sessionId: string) {
+  if (!sessionId) return { error: "Session ID required" };
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not authenticated" };
+
+  // Verify ownership
+  const { data: session } = await supabase
+    .from("chat_sessions")
+    .select("id, user_id")
+    .eq("id", sessionId)
+    .maybeSingle();
+
+  if (!session || session.user_id !== user.id) {
+    return { error: "Chat session not found or unauthorized" };
+  }
+
+  // Delete chat messages then session
+  await supabase.from("chat_messages").delete().eq("session_id", sessionId);
+  const { error } = await supabase
+    .from("chat_sessions")
+    .delete()
+    .eq("id", sessionId);
+
+  if (error) return { error: error.message };
+  return { success: true };
 }

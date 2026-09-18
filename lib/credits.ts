@@ -1,11 +1,13 @@
 /**
- * Credit metering — controls the free-tier budget.
+ * Credit metering — controls the free-tier budget and all AI operation costs.
  *
- * One credit per enriched prospect. credits_remaining is denormalized
- * on public.users for fast reads; credit_transactions is the
- * append-only ledger that lets us reconstruct balance if needed.
+ * One credit powers an AI operation (research, writing, chat turn, etc.).
+ * credits_remaining is denormalized on public.users for fast reads;
+ * credit_transactions is the append-only ledger that lets us reconstruct
+ * balance if needed.
  *
- * Used by start_bulk_job to refuse runs that would overdraw the user.
+ * Used by start_bulk_job and AI route handlers to refuse runs that would
+ * overdraw the user.
  */
 
 import { createAdminClient } from "@/lib/supabase/server"
@@ -29,6 +31,10 @@ const PLAN_CREDITS: Record<string, number> = {
  * it skips users whose reset_at is still in the future, so the cost is
  * one read + (at most monthly) one write per active user.
  *
+ * Rollover logic: carry forward up to rolloverPercent% of unused credits
+ * (floor(unused * rolloverPercent / 100)). The rollover amount is stored
+ * in plan_rollover_credits on users for visibility. Grant = baseGrant + rolloverAmount.
+ *
  * Called from /api/chat at the top of each turn so the free tier is
  * actually renewable.
  */
@@ -47,7 +53,15 @@ export async function maybeResetCredits(userId: string): Promise<void> {
   if (!resetAt || resetAt > new Date()) return
 
   const plan = (row.plan as string) ?? "free"
-  const grant = PLAN_CREDITS[plan] ?? PLAN_CREDITS.free
+  const baseGrant = PLAN_CREDITS[plan] ?? PLAN_CREDITS.free
+  const currentRemaining = (row.credits_remaining as number) ?? 0
+
+  // Rollover: carry forward up to rolloverPercent% of unused credits.
+  const rolloverPct = (PLANS as Record<string, { rolloverPercent?: number }>)[plan]?.rolloverPercent ?? 0
+  const rolloverAmount =
+    rolloverPct > 0 ? Math.floor(currentRemaining * (rolloverPct / 100)) : 0
+  const grant = baseGrant + rolloverAmount
+
   const nextReset = new Date(Date.now() + 30 * 86_400_000).toISOString()
 
   await supabase
@@ -55,6 +69,7 @@ export async function maybeResetCredits(userId: string): Promise<void> {
     .update({
       credits_remaining: grant,
       credits_reset_at: nextReset,
+      plan_rollover_credits: rolloverAmount,
     })
     .eq("id", userId)
     .lt("credits_reset_at", new Date().toISOString())
@@ -63,7 +78,7 @@ export async function maybeResetCredits(userId: string): Promise<void> {
   await supabase.from("credit_transactions").insert({
     user_id: userId,
     delta: grant,
-    reason: `monthly_reset_${plan}`,
+    reason: `monthly_reset_${plan}${rolloverAmount > 0 ? `_rollover_${rolloverAmount}` : ""}`,
   })
 }
 
@@ -118,14 +133,17 @@ export async function checkCredits(
  * by re-reading inside the update. For real-world race resilience
  * we should move this to a Postgres function — but for v0.5 single-job
  * single-user this is enough.
+ *
+ * @param opts.jobId  Optional — AI operations may not have a job ID.
+ *                    Defaults to "system" when omitted.
  */
 export async function deductCredits(opts: {
   userId: string
   count: number
-  jobId: string
+  jobId?: string
   reason: string
 }): Promise<{ ok: boolean; remaining: number; error?: string }> {
-  const { userId, count, jobId, reason } = opts
+  const { userId, count, jobId = "system", reason } = opts
   const supabase = createAdminClient()
 
   // Read current.
@@ -173,4 +191,64 @@ export async function deductCredits(opts: {
   })
 
   return { ok: true, remaining: next }
+}
+
+/**
+ * Add credits to a user's balance without resetting the plan cycle.
+ * Used for one-time credit pack purchases and enterprise top-ups.
+ * Writes a credit_transactions ledger entry for the audit trail.
+ *
+ * @param userId     Target user.
+ * @param amount     Number of credits to add (must be > 0).
+ * @param reason     Human-readable ledger reason (e.g. "credit_pack_pack_6000").
+ * @param paymentId  Optional payment provider reference for traceability.
+ */
+export async function addCredits(
+  userId: string,
+  amount: number,
+  reason: string,
+  paymentId?: string,
+): Promise<{ ok: boolean; newBalance: number; error?: string }> {
+  if (amount <= 0) {
+    return { ok: false, newBalance: 0, error: "Credit amount must be positive." }
+  }
+
+  const supabase = createAdminClient()
+
+  // Read current balance.
+  const { data: row, error: readErr } = await supabase
+    .from("users")
+    .select("credits_remaining")
+    .eq("id", userId)
+    .maybeSingle()
+
+  if (readErr || !row) {
+    return { ok: false, newBalance: 0, error: "Could not read credit balance." }
+  }
+
+  const current = (row.credits_remaining as number) ?? 0
+  const newBalance = current + amount
+
+  const { error: updateErr } = await supabase
+    .from("users")
+    .update({ credits_remaining: newBalance })
+    .eq("id", userId)
+
+  if (updateErr) {
+    return {
+      ok: false,
+      newBalance: current,
+      error: "Failed to update credit balance.",
+    }
+  }
+
+  // Ledger entry — include payment reference when provided.
+  await supabase.from("credit_transactions").insert({
+    user_id: userId,
+    delta: amount,
+    reason,
+    ...(paymentId ? { payment_id: paymentId } : {}),
+  })
+
+  return { ok: true, newBalance }
 }
