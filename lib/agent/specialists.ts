@@ -9,47 +9,52 @@
  * Adding a specialist is purely additive: append an entry to the catalog.
  */
 
-import { type ToolSet } from "ai"
+import { type ToolSet } from "ai";
 
-import { MODEL_EMAIL, MODEL_RESEARCH } from "@/lib/providers/anthropic"
-import { TOOL_FACTORIES, type ToolContext } from "./tools"
+import { MODEL_EMAIL, MODEL_RESEARCH } from "@/lib/providers/anthropic";
+import { TOOL_FACTORIES, type ToolContext } from "@/lib/agent/tools";
 import {
   SPECIALIST_META,
   SPECIALIST_NAMES,
   type SpecialistModelTier,
   type SpecialistName,
-} from "./orchestration-core"
+} from "@/lib/agent/orchestration-core";
 
-export { SPECIALIST_NAMES }
-export type { SpecialistName }
+export { SPECIALIST_NAMES };
+export type { SpecialistName };
 
 export interface Specialist {
-  name: SpecialistName
-  role: string
-  emoji: string
-  model: string
-  maxSteps: number
-  systemPrompt: string
-  makeTools: (ctx: ToolContext) => ToolSet
+  name: SpecialistName;
+  role: string;
+  emoji: string;
+  model: string;
+  modelTier: SpecialistModelTier;
+  maxSteps: number;
+  systemPrompt: string;
+  makeTools: (ctx: ToolContext) => ToolSet;
 }
 
 function tierToModel(tier: SpecialistModelTier): string {
-  return tier === "email" ? MODEL_EMAIL : MODEL_RESEARCH
+  return tier === "email" ? MODEL_EMAIL : MODEL_RESEARCH;
 }
 
-export const SPECIALISTS: Record<SpecialistName, Specialist> = Object.fromEntries(
-  SPECIALIST_NAMES.map((name) => {
-    const meta = SPECIALIST_META[name]
-    const specialist: Specialist = {
-      name,
-      role: meta.role,
-      emoji: meta.emoji,
-      model: tierToModel(meta.modelTier),
-      maxSteps: meta.maxSteps,
-      systemPrompt: meta.systemPrompt,
-      makeTools: (ctx: ToolContext): ToolSet =>
-        Object.fromEntries(meta.toolNames.map((tn) => [tn, TOOL_FACTORIES[tn](ctx)])),
-    }
-    return [name, specialist]
-  }),
-) as Record<SpecialistName, Specialist>
+export const SPECIALISTS: Record<SpecialistName, Specialist> =
+  Object.fromEntries(
+    SPECIALIST_NAMES.map((name) => {
+      const meta = SPECIALIST_META[name];
+      const specialist: Specialist = {
+        name,
+        role: meta.role,
+        emoji: meta.emoji,
+        model: tierToModel(meta.modelTier),
+        modelTier: meta.modelTier,
+        maxSteps: meta.maxSteps,
+        systemPrompt: meta.systemPrompt,
+        makeTools: (ctx: ToolContext): ToolSet =>
+          Object.fromEntries(
+            meta.toolNames.map((tn) => [tn, TOOL_FACTORIES[tn](ctx)]),
+          ),
+      };
+      return [name, specialist];
+    }),
+  ) as Record<SpecialistName, Specialist>;

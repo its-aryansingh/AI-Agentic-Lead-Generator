@@ -244,6 +244,65 @@ describe("row security (real Postgres, no RLS)", { skip }, () => {
     })
   })
 
+  describe(".or() — the PostgREST disjunction filter", () => {
+    // Added for the SalesEngAI agent port, whose search_leads handler
+    // calls .or(`input_name.ilike.%${term}%,email.ilike.%${term}%`).
+    // That term comes from an agent tool call, so it ultimately comes
+    // from chat input. These assert it is parameterised, not spliced.
+
+    it("matches on either branch", async () => {
+      const r = await alice.from("prospects")
+        .select("id,input_company")
+        .or("input_company.ilike.%Acme%,input_company.ilike.%Nothing%")
+      assert.equal(r.error, null)
+      assert.equal(r.data.length, 1)
+    })
+
+    it("is still ownership-filtered — the other tenant's row never matches", async () => {
+      const r = await alice.from("prospects")
+        .select("id,input_company")
+        .or("input_company.ilike.%Acme%,input_company.ilike.%MalCo%")
+      assert.equal(r.error, null)
+      assert.deepEqual(r.data.map((x: any) => x.input_company), ["AcmeCo"])
+    })
+
+    it("treats a quote as data, not syntax", async () => {
+      // If the term were concatenated into SQL this would be a syntax
+      // error or worse. Parameterised, it is simply a search for a
+      // company nobody is called.
+      const evil = "%' or '1'='1"
+      const r = await alice.from("prospects")
+        .select("id")
+        .or(`input_company.ilike.%${evil}%,email.ilike.%${evil}%`)
+      assert.equal(r.error, null)
+      assert.equal(r.data.length, 0)
+    })
+
+    it("a comment-injection attempt cannot truncate the ownership predicate", async () => {
+      const evil = "x%'; drop table public.prospects; --"
+      const r = await alice.from("prospects").select("id").or(`input_company.ilike.%${evil}%`)
+      assert.equal(r.error, null)
+      assert.equal(r.data.length, 0)
+      // The table is still there.
+      assert.equal((await admin.from("prospects").select("id")).error, null)
+    })
+
+    it("rejects a column name that is not a plain identifier", async () => {
+      const r = await alice.from("prospects").select("id").or('"a"."b".eq.1')
+      assert.notEqual(r.error, null)
+    })
+
+    it("rejects an unknown operator rather than passing it through", async () => {
+      const r = await alice.from("prospects").select("id").or("input_company.matches.x")
+      assert.notEqual(r.error, null)
+    })
+
+    it("rejects a nested group", async () => {
+      const r = await alice.from("prospects").select("id").or("and(a.eq.1,b.eq.2)")
+      assert.notEqual(r.error, null)
+    })
+  })
+
   describe("fails closed", () => {
     it("a table with no ownership rule is denied to user-scoped clients", async () => {
       const r = await alice.from("scrape_cache").select("*")

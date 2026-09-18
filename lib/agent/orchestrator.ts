@@ -12,33 +12,30 @@
  * underlying handlers (Inngest), so specialists stay interactive.
  */
 
-import { generateText, stepCountIs } from "ai"
-import { anthropic } from "@ai-sdk/anthropic"
+import { generateText, stepCountIs } from "ai";
+import { SPECIALISTS, type SpecialistName } from "@/lib/agent/specialists";
+import { outputLooksMock } from "@/lib/agent/orchestration-core";
+import type { ToolContext } from "@/lib/agent/tools";
 
-import { SPECIALISTS, type SpecialistName } from "./specialists"
-import { outputLooksMock } from "./orchestration-core"
-import type { ToolContext } from "./tools"
-
-function hasAnthropicKey(): boolean {
-  return Boolean(process.env.ANTHROPIC_API_KEY)
-}
+import { resolveAiModel, recordAiUsage, deductCreditsForAiOp } from "@/lib/ai-config";
+import { safeAiError } from "@/lib/ai-config-core";
 
 export interface SpecialistResult {
-  specialist: SpecialistName
-  role: string
-  emoji: string
+  specialist: SpecialistName;
+  role: string;
+  emoji: string;
   /** The specialist's final natural-language summary. */
-  summary: string
+  summary: string;
   /** How many reasoning/tool steps it took. */
-  steps: number
+  steps: number;
   /** Names of tools the specialist invoked, in order. */
-  tools_used: string[]
+  tools_used: string[];
   /** Raw tool outputs, for the orchestrator / UI to render details. */
-  outputs: Array<{ tool: string; output: unknown }>
+  outputs: Array<{ tool: string; output: unknown }>;
   /** True if any underlying provider returned demo/mock data. */
-  used_mock: boolean
+  used_mock: boolean;
   /** Present only when the specialist could not complete. */
-  error?: string
+  error?: string;
 }
 
 /**
@@ -50,13 +47,17 @@ export async function runSpecialist(
   instruction: string,
   ctx: ToolContext,
 ): Promise<SpecialistResult> {
-  const spec = SPECIALISTS[name]
-  const base = { specialist: name, role: spec.role, emoji: spec.emoji }
+  const spec = SPECIALISTS[name];
+  const base = { specialist: name, role: spec.role, emoji: spec.emoji };
 
   // Mock-safe: with no Anthropic key we cannot drive a sub-agent loop, so
   // return a deterministic placeholder. (The chat route's own mock branch
   // normally short-circuits before reaching here.)
-  if (!hasAnthropicKey()) {
+  const resolved = await resolveAiModel(
+    ctx.userId,
+    spec.modelTier === "email" ? "writing" : "research",
+  );
+  if (!resolved) {
     return {
       ...base,
       summary: `[demo] ${spec.role} would handle: ${instruction.slice(0, 140)}`,
@@ -64,25 +65,45 @@ export async function runSpecialist(
       tools_used: [],
       outputs: [],
       used_mock: true,
-    }
+    };
   }
 
   try {
-    const tools = spec.makeTools(ctx)
-    const hasTools = Object.keys(tools).length > 0
+    const tools = spec.makeTools(ctx);
+    const hasTools = Object.keys(tools).length > 0;
 
     const result = await generateText({
-      model: anthropic(spec.model),
+      model: resolved.model,
       system: spec.systemPrompt,
       prompt: instruction,
       ...(hasTools ? { tools, stopWhen: stepCountIs(spec.maxSteps) } : {}),
-    })
+    });
 
     const outputs = (result.toolResults ?? []).map((tr) => ({
       tool: (tr as { toolName: string }).toolName,
       output: (tr as { output: unknown }).output,
-    }))
+    }));
 
+    const purpose = spec.modelTier === "email" ? "writing" : "research";
+    const creditCost = (await import("../credit-costs")).creditsForOperation(
+      resolved.modelId,
+      purpose,
+    );
+    await recordAiUsage({
+      userId: ctx.userId,
+      provider: resolved.provider,
+      model: resolved.modelId,
+      operation: `specialist_${name}`,
+      status: "completed",
+      durationMs: 0,
+      creditCost,
+    });
+    await deductCreditsForAiOp({
+      userId: ctx.userId,
+      modelId: resolved.modelId,
+      purpose,
+      operationLabel: `specialist_${name}`,
+    });
     return {
       ...base,
       summary: result.text,
@@ -92,8 +113,17 @@ export async function runSpecialist(
       ),
       outputs,
       used_mock: outputs.some((o) => outputLooksMock(o.output)),
-    }
+    };
   } catch (err) {
+    await recordAiUsage({
+      userId: ctx.userId,
+      provider: resolved.provider,
+      model: resolved.modelId,
+      operation: `specialist_${name}`,
+      status: "failed",
+      durationMs: 0,
+      errorCode: safeAiError(err),
+    });
     return {
       ...base,
       summary: "",
@@ -102,6 +132,6 @@ export async function runSpecialist(
       outputs: [],
       used_mock: false,
       error: err instanceof Error ? err.message : "specialist failed",
-    }
+    };
   }
 }

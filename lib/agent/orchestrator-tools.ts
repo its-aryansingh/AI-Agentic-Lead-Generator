@@ -7,14 +7,23 @@
  * direct tool (a UX primitive, not a specialist task).
  */
 
-import { tool, type ToolSet } from "ai"
-import { z } from "zod"
+import { tool, type ToolSet } from "ai";
+import { z } from "zod";
 
-import { runSpecialist } from "./orchestrator"
-import type { SpecialistName } from "./specialists"
-import { clarifyTool, type ToolContext } from "./tools"
-import { createAutomation } from "@/lib/automations"
-import { validateAutomation } from "@/lib/automation-core"
+import { runSpecialist } from "@/lib/agent/orchestrator";
+import type { SpecialistName } from "@/lib/agent/specialists";
+import {
+  clarifyTool,
+  enrichIntakeJobTool,
+  enrichLeadTool,
+  launchCampaignTool,
+  listIntakeJobsTool,
+  saveCandidatesToLeadsTool,
+  searchLeadsTool,
+  type ToolContext,
+} from "@/lib/agent/tools";
+import { createAutomation } from "@/lib/automations";
+import { validateAutomation } from "@/lib/automation-core";
 
 const instructionSchema = z.object({
   instruction: z
@@ -22,7 +31,7 @@ const instructionSchema = z.object({
     .describe(
       "A clear, self-contained instruction for the specialist: what to do, for whom, with any specifics (ICP, named people, and the user's confirmation status).",
     ),
-})
+});
 
 function delegationTool(
   name: SpecialistName,
@@ -33,7 +42,7 @@ function delegationTool(
     description,
     inputSchema: instructionSchema,
     execute: async ({ instruction }) => runSpecialist(name, instruction, ctx),
-  })
+  });
 }
 
 export function makeOrchestratorTools(ctx: ToolContext): ToolSet {
@@ -56,21 +65,31 @@ export function makeOrchestratorTools(ctx: ToolContext): ToolSet {
     run_compliance: delegationTool(
       "compliance",
       ctx,
-      "Delegate to the Compliance reviewer to check a draft or planned batch for CAN-SPAM / GDPR / India DPDP and deliverability risk BEFORE sending.",
+      "Delegate to the Compliance reviewer to check a draft or planned batch for quality and deliverability before sending.",
     ),
     run_outreach: delegationTool(
       "outreach",
       ctx,
-      "Delegate to the Outreach coordinator to run bulk enrichment (Sheet + CSV) or, ONLY with explicit user confirmation, queue a real email campaign. State the confirmation status in the instruction.",
+      "Delegate to the Outreach coordinator to run bulk enrichment (Sheet + CSV) or queue a real email campaign.",
     ),
+    search_leads: searchLeadsTool(ctx),
+    save_candidates_to_leads: saveCandidatesToLeadsTool(ctx),
+    enrich_lead: enrichLeadTool(ctx),
+    list_intake_jobs: listIntakeJobsTool(ctx),
+    enrich_intake_job: enrichIntakeJobTool(ctx),
+    launch_campaign: launchCampaignTool(ctx),
     create_automation: tool({
       description:
         "Create a recurring automation: the AI team runs the given instruction automatically on a schedule (hourly/daily/weekly). Use when the user wants something to happen repeatedly, e.g. 'every Monday find 20 fintech CMOs and draft outreach'. Confirm the schedule with the user before creating.",
       inputSchema: z.object({
-        name: z.string().describe("Short name, e.g. 'Weekly fintech CMO push'."),
+        name: z
+          .string()
+          .describe("Short name, e.g. 'Weekly fintech CMO push'."),
         instruction: z
           .string()
-          .describe("The full job to run each time, exactly as the user would type it into chat."),
+          .describe(
+            "The full job to run each time, exactly as the user would type it into chat.",
+          ),
         frequency: z.enum(["hourly", "daily", "weekly"]),
         hour_utc: z
           .number()
@@ -88,8 +107,8 @@ export function makeOrchestratorTools(ctx: ToolContext): ToolSet {
           .describe("0=Sun .. 6=Sat for weekly runs (default 1=Mon)."),
       }),
       execute: async (params) => {
-        const err = validateAutomation(params)
-        if (err) return { error: err }
+        const err = validateAutomation(params);
+        if (err) return { error: err };
         return createAutomation(
           {
             name: params.name,
@@ -99,9 +118,9 @@ export function makeOrchestratorTools(ctx: ToolContext): ToolSet {
             dayOfWeek: params.day_of_week,
           },
           ctx.userId,
-        )
+        );
       },
     }),
     clarify_question: clarifyTool(ctx),
-  }
+  };
 }
