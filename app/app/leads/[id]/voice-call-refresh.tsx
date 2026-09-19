@@ -3,24 +3,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { isTerminalVoiceExecutionStatus } from "@/lib/voice/outcome-state";
 
-const terminalStatuses = new Set([
-  "completed", "failed", "cancelled", "canceled", "no-answer", "busy",
-  "stopped", "error", "balance-low",
-]);
-
-export function VoiceCallRefresh({ executionId, status, providerStatus, providerExecutionId }: {
+export function VoiceCallRefresh({ executionId, status, providerExecutionId }: {
   executionId: string;
   status: string;
-  providerStatus: string | null;
   providerExecutionId: string | null;
 }) {
   const router = useRouter();
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const running = useRef(false);
-  const currentStatus = (providerStatus || status).toLowerCase();
-  const terminal = terminalStatuses.has(status.toLowerCase()) || terminalStatuses.has(currentStatus);
+  const terminal = isTerminalVoiceExecutionStatus(status);
 
   const refresh = useCallback(async () => {
     if (!providerExecutionId || running.current) return false;
@@ -39,6 +33,10 @@ export function VoiceCallRefresh({ executionId, status, providerStatus, provider
       router.refresh();
       return Boolean(body?.terminal);
     } catch (cause) {
+      // The server may already have persisted transcript artifacts before a
+      // downstream qualification step failed. Show that progress and keep
+      // polling until the app-owned execution reaches a terminal state.
+      router.refresh();
       setError(cause instanceof Error ? cause.message : "Could not refresh call details.");
       return false;
     } finally {

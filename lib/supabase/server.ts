@@ -48,13 +48,30 @@ export interface CompatAuth {
 export interface CompatClient {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   from<T = any>(table: string): QueryBuilder<T>
-  rpc<T = unknown>(fn: string, args?: Record<string, unknown>): Promise<{ data: T | null; error: { message: string; code?: string } | null }>
+  /**
+   * supabase-js types rpc() as `any` unless the caller supplies a
+   * generated Database type, and ~15 ported call sites destructure and
+   * iterate the result on that basis. Defaulting to `unknown` here made
+   * every one of them a compile error for no safety gain, since none of
+   * them can narrow what a SQL function returns anyway.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  rpc<T = any>(fn: string, args?: Record<string, unknown>): Promise<{ data: T | null; error: { message: string; code?: string } | null }>
   auth: CompatAuth
 }
 
-function makeRpc(_userId: string | null) {
-  return async function rpc<T = unknown>(fn: string, args: Record<string, unknown> = {}) {
+function makeRpc(userId: string | null) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return async function rpc<T = any>(fn: string, args: Record<string, unknown> = {}) {
     try {
+      // Replaces the Supabase grant/revoke on these functions. See
+      // SERVICE_ONLY_RPC in lib/db/rls.ts for why the database can no
+      // longer enforce it.
+      if (userId) {
+        const { rpcDenied } = await import("@/lib/db/rls")
+        const denied = rpcDenied(fn)
+        if (denied) return { data: null, error: { message: denied, code: "42501" } }
+      }
       const keys = Object.keys(args)
       const named = keys.map((k, i) => `${k} => $${i + 1}`).join(", ")
       const params = keys.map((k) => {

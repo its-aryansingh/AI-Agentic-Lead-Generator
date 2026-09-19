@@ -3,11 +3,6 @@ import { redirect } from "next/navigation";
 import { BillingClient } from "@/app/app/settings/billing/billing-client";
 import { PlanType } from "@/lib/billing-shared";
 
-
-// Kept from the pre-port version: every page under /app reads the
-// session cookie and cannot be statically prerendered.
-export const dynamic = "force-dynamic"
-
 export const metadata = {
   title: "Billing & Packs | Aravya SalesEngAI",
 };

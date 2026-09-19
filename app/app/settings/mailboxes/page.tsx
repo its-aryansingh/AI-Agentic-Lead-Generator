@@ -8,11 +8,6 @@ import { Input } from "@/components/ui/input"
 import { warmupCap, revokeGmailCredential, sendGmail, verifyGmailCredential, classifyGmailError } from "@/lib/providers/gmail"
 import { decryptCredential } from "@/lib/credential-crypto"
 
-
-// Kept from the pre-port version: every page under /app reads the
-// session cookie and cannot be statically prerendered.
-export const dynamic = "force-dynamic"
-
 /**
  * /app/settings/mailboxes — connect a sending Gmail + see warm-up status.
  *

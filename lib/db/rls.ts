@@ -89,14 +89,20 @@ export const OWNERSHIP: Record<string, Ownership> = {
   reply_classifications: { kind: "column", column: "user_id" },
   email_events: { kind: "column", column: "user_id" },
 
+  // prospects USED to be parent-owned through jobs. db/migrations/
+  // 0004_salesengai_phase8.sql adds prospects.user_id, backfills it from
+  // jobs and makes it NOT NULL, because the composite key
+  // prospects(id, user_id) is what pins every child row — voice
+  // executions, qualification facts, CRM syncs, campaign recipients — to
+  // one tenant in the database rather than in application code.
+  //
+  // So ownership moves to the column: tighter, one less join per query,
+  // and exactly what that migration's own `create policy "own prospects"`
+  // declared. The two changed in the same commit and must stay together —
+  // reverting one without the other is a cross-tenant leak.
+  prospects: { kind: "column", column: "user_id" },
+
   // Ownership via a parent row.
-  prospects: {
-    kind: "parent",
-    localKey: "job_id",
-    parentTable: "jobs",
-    parentKey: "id",
-    parentOwner: "user_id",
-  },
   chat_messages: {
     kind: "parent",
     localKey: "session_id",
@@ -178,6 +184,53 @@ export const OWNERSHIP: Record<string, Ownership> = {
   // own_credit_packs — for SELECT only. Purchase history is written by
   // the Stripe/Razorpay webhook, never by the signed-in user.
   credit_packs: { kind: "column", column: "user_id", readOnly: true },
+
+  // -------------------------------------------------------------------
+  // Ported from the SalesEngAIMVP voice-lifecycle, autonomous-outreach,
+  // CRM-pull and Phase 8 work — transcribed from the 26 `create policy`
+  // statements that db/migrations/0004_salesengai_phase8.sql drops. All
+  // were `auth.uid() = user_id`; the two marked readOnly were `for
+  // select` only.
+  // -------------------------------------------------------------------
+
+  // own_outreach_schedules / _runs / _run_items — for all
+  outreach_schedules: { kind: "column", column: "user_id" },
+  outreach_runs: { kind: "column", column: "user_id" },
+  outreach_run_items: { kind: "column", column: "user_id" },
+
+  // own_outreach_action_approvals — for all. An approval is what
+  // authorises an autonomous send or call, so a forged row here is the
+  // whole safety gate.
+  outreach_action_approvals: { kind: "column", column: "user_id" },
+
+  // own_lead_state_events / own_lead_followups — for all
+  lead_state_events: { kind: "column", column: "user_id" },
+  lead_followups: { kind: "column", column: "user_id" },
+
+  // own_lead_handoffs / own_lead_handoff_notification_outbox — for all
+  lead_handoffs: { kind: "column", column: "user_id" },
+  lead_handoff_notification_outbox: { kind: "column", column: "user_id" },
+
+  // own_crm_pull_runs / own_prospect_crm_links — for all
+  crm_pull_runs: { kind: "column", column: "user_id" },
+  prospect_crm_links: { kind: "column", column: "user_id" },
+
+  // own_voice_action_requests — for all
+  voice_action_requests: { kind: "column", column: "user_id" },
+
+  // own_calendar_connections — for all. Holds OAuth credentials.
+  calendar_connections: { kind: "column", column: "user_id" },
+
+  // own_voice_compliance_decisions_select — for SELECT only. This is the
+  // record of why a call was allowed or refused; the compliance code
+  // writes it with the service client. A user who could insert here
+  // could manufacture their own consent trail.
+  voice_compliance_decisions: { kind: "column", column: "user_id", readOnly: true },
+
+  // own_voice_call_override_audits — for SELECT only, and the migration
+  // additionally installs a trigger making the rows immutable. This is
+  // the record of a human overriding a calling restriction.
+  voice_call_override_audits: { kind: "column", column: "user_id", readOnly: true },
 }
 
 /**
@@ -276,5 +329,44 @@ export function writeDenied(table: string): string | null {
   return (
     `row security: ${table} is read-only for a signed-in user (the ` +
     `original policy was "for select"). Write it with createAdminClient().`
+  )
+}
+
+/**
+ * Functions a user-scoped client may not call.
+ *
+ * On Supabase these carried
+ *     revoke all on function ... from public, anon, authenticated;
+ *     grant execute on function ... to service_role;
+ * so PostgREST refused them to a signed-in user. 0004 strips those
+ * statements because anon/authenticated/service_role do not exist on
+ * Railway — but what they expressed still holds. These functions move
+ * credits, claim queue work and reserve outbound calls; every one is
+ * reached from server-side code that legitimately holds the admin
+ * client, and none should be callable with a session cookie.
+ *
+ * Railway runs every query as one database user, so the database cannot
+ * make this distinction any more. lib/supabase/server.ts enforces it
+ * instead: createClient().rpc() refuses these, createAdminClient().rpc()
+ * does not. Add a service-role function to a migration and add it here
+ * in the same commit.
+ */
+export const SERVICE_ONLY_RPC = new Set([
+  "apply_crm_pull_contact",
+  "begin_crm_pull_run",
+  "claim_campaign_recipients",
+  "claim_handoff_notifications",
+  "claim_outreach_items",
+  "deduct_credits_atomic",
+  "list_due_outreach_runs",
+  "reserve_voice_execution",
+])
+
+/** Refusal message when a user-scoped client calls a service-only function. */
+export function rpcDenied(fn: string): string | null {
+  if (!SERVICE_ONLY_RPC.has(fn)) return null
+  return (
+    `row security: public.${fn}() is service-role only (it was revoked ` +
+    `from "authenticated" under Supabase). Call it with createAdminClient().`
   )
 }

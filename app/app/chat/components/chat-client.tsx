@@ -27,6 +27,12 @@ import {
   Send,
   HelpCircle,
   Loader2,
+  BarChart3,
+  CalendarClock,
+  PhoneCall,
+  RefreshCw,
+  ShieldCheck,
+  Volume2,
 } from "lucide-react";
 import { csvToProspects, type ParsedProspect } from "@/lib/csv-parse";
 
@@ -61,8 +67,25 @@ interface WebSearchResult {
     name: string;
     title: string;
     company: string;
-    source_url: string;
+    source_url?: string;
+    convertibilityScore?: number;
+    intentBucket?: "high" | "medium" | "low";
+    primaryTrigger?: string;
+    suggestedHook?: string;
+    signals?: {
+      hasActiveHiring?: boolean;
+      hiringRoles?: string[];
+      recentFunding?: {
+        amount?: string;
+        round?: string;
+        date?: string;
+      };
+      isNewInRole?: boolean;
+      monthsInRole?: number;
+      signalSummary?: string;
+    };
   }>;
+  sourceUsed?: "apollo" | "web_signal" | "mock";
   using_mock_data?: boolean;
 }
 
@@ -289,7 +312,7 @@ export function ChatClient({
         <div className="max-w-3xl mx-auto flex flex-col gap-6">
           {messages.length === 0 && <EmptyState onPick={(s) => submit(s)} />}
           {messages.map((m) => (
-            <MessageBubble key={m.id} message={m} />
+            <MessageBubble key={m.id} message={m} sessionId={sessionId} />
           ))}
         </div>
       </section>
@@ -460,7 +483,7 @@ function applyStreamEvent(
 // Rendering
 // ---------------------------------------------------------------------
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({ message, sessionId }: { message: ChatMessage; sessionId?: string }) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
@@ -476,7 +499,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         Aravya SalesEngAI
       </div>
       {message.toolCalls?.map((tc, i) => (
-        <ToolCallCard key={i} toolCall={tc} />
+        <ToolCallCard key={i} toolCall={tc} sessionId={sessionId} />
       ))}
       {message.text && (
         <div className="text-sm leading-relaxed whitespace-pre-wrap">
@@ -503,7 +526,7 @@ function runningLabel(toolName: string): string {
   return label ? `${label} working…` : `Running ${toolName}…`;
 }
 
-function ToolCallCard({ toolCall }: { toolCall: ToolCall }) {
+function ToolCallCard({ toolCall, sessionId }: { toolCall: ToolCall; sessionId?: string }) {
   if (toolCall.state === "running") {
     return (
       <Card
@@ -526,7 +549,7 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCall }) {
     return <SpecialistCard result={toolCall.result as SpecialistResult} />;
   }
   return (
-    <ToolOutputCard toolName={toolCall.toolName} result={toolCall.result} />
+    <ToolOutputCard toolName={toolCall.toolName} result={toolCall.result} sessionId={sessionId} />
   );
 }
 
@@ -534,10 +557,18 @@ function ToolCallCard({ toolCall }: { toolCall: ToolCall }) {
 function ToolOutputCard({
   toolName,
   result,
+  sessionId,
 }: {
   toolName: string;
   result?: ToolResult;
+  sessionId?: string;
 }) {
+  if (toolName === "create_or_update_voice_agent") return <VoiceAgentControlCard result={result} sessionId={sessionId} />;
+  if (toolName === "start_qualification_calls_batch") return <QualificationCallsCard result={result} sessionId={sessionId} />;
+  if (toolName === "schedule_lead_followup") return <FollowupCard result={result} sessionId={sessionId} />;
+  if (toolName === "sync_crm_leads") return <CrmSyncCard result={result} sessionId={sessionId} />;
+  if (toolName === "get_call_details_and_analytics") return <CallAnalyticsCard result={result} />;
+  if (toolName === "trigger_outreach_run") return <OutreachRunCard result={result} sessionId={sessionId} />;
   if (
     toolName === "web_search" ||
     toolName === "public_source_search" ||
@@ -616,6 +647,133 @@ function ToolOutputCard({
     );
   }
   return null;
+}
+
+type ControlResult = Record<string, unknown> & {
+  error?: string;
+  message?: string;
+  preview?: Record<string, unknown>;
+  confirmation?: {
+    approval_id?: string;
+    confirmation_token?: string;
+    expires_at?: string;
+    requires_confirmation?: boolean;
+    requires_second_confirmation?: boolean;
+  };
+};
+
+function VoiceAgentControlCard({ result, sessionId }: { result?: ToolResult; sessionId?: string }) {
+  return <ActionPreviewCard title="Bolna voice agent" icon={<Volume2 className="w-4 h-4 text-primary" />} result={result as ControlResult} sessionId={sessionId} />;
+}
+
+function QualificationCallsCard({ result, sessionId }: { result?: ToolResult; sessionId?: string }) {
+  return <ActionPreviewCard title="Qualification calls" icon={<PhoneCall className="w-4 h-4 text-primary" />} result={result as ControlResult} sessionId={sessionId} />;
+}
+
+function FollowupCard({ result, sessionId }: { result?: ToolResult; sessionId?: string }) {
+  return <ActionPreviewCard title="Lead follow-up" icon={<CalendarClock className="w-4 h-4 text-primary" />} result={result as ControlResult} sessionId={sessionId} />;
+}
+
+function CrmSyncCard({ result, sessionId }: { result?: ToolResult; sessionId?: string }) {
+  return <ActionPreviewCard title="CRM sync" icon={<RefreshCw className="w-4 h-4 text-primary" />} result={result as ControlResult} sessionId={sessionId} />;
+}
+
+function OutreachRunCard({ result, sessionId }: { result?: ToolResult; sessionId?: string }) {
+  return <ActionPreviewCard title="Outreach run" icon={<ShieldCheck className="w-4 h-4 text-primary" />} result={result as ControlResult} sessionId={sessionId} />;
+}
+
+function ActionPreviewCard({
+  title,
+  icon,
+  result,
+  sessionId,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  result: ControlResult;
+  sessionId?: string;
+}) {
+  const [state, setState] = React.useState<"idle" | "submitting" | "second" | "success" | "error">("idle");
+  const [execution, setExecution] = React.useState<Record<string, unknown> | null>(null);
+  const confirmation = result?.confirmation;
+  const canConfirm = Boolean(sessionId && confirmation?.approval_id && confirmation?.confirmation_token);
+  const submitConfirmation = async (overrideConfirmed = false) => {
+    if (!sessionId || !confirmation?.approval_id || !confirmation.confirmation_token) return;
+    setState("submitting");
+    try {
+      const response = await fetch("/api/chat/tool-confirmations", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionId, approvalId: confirmation.approval_id, confirmationToken: confirmation.confirmation_token, overrideConfirmed }),
+      });
+      const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      setExecution(body);
+      if (body.requires_second_confirmation === true) setState("second");
+      else setState(response.ok && !body.error ? "success" : "error");
+    } catch {
+      setExecution({ error: "network_error", message: "The confirmation could not be sent. Retry safely." });
+      setState("error");
+    }
+  };
+  const previewText = result?.preview
+    ? Object.entries(result.preview)
+        .filter(([, value]) => value !== null && value !== undefined && typeof value !== "object")
+        .slice(0, 6)
+        .map(([key, value]) => `${key.replace(/_/g, " ")}: ${String(value)}`)
+    : [];
+  const details = execution ?? result;
+  const nestedResult = details?.result as Record<string, unknown> | undefined;
+  const partial = nestedResult?.status === "partial" || Number(nestedResult?.blocked ?? 0) > 0 || Number(nestedResult?.failed ?? 0) > 0;
+  return (
+    <Card size="sm" className="overflow-hidden border-muted-foreground/20">
+      <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          {icon}<span>{title}</span>
+          {state === "success" && <Badge className="ml-auto bg-emerald-600">Confirmed</Badge>}
+          {state === "submitting" && <Loader2 className="ml-auto w-4 h-4 animate-spin" />}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="p-4 flex flex-col gap-3 text-sm">
+        {previewText.length > 0 && (
+          <dl className="grid grid-cols-[minmax(0,1fr)] gap-1 text-xs text-muted-foreground">
+            {previewText.map((line) => <div key={line}>{line}</div>)}
+          </dl>
+        )}
+        {result?.preview && typeof result.preview.blocked === "object" && (
+          <div className="text-xs text-amber-700 dark:text-amber-300">Blocked leads remain excluded when this runs.</div>
+        )}
+        {Boolean(result?.estimates) && <div className="text-xs text-muted-foreground">Preview includes created, updated, and skipped estimates.</div>}
+        {(details?.message as string | undefined) && <div className={details?.error ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{String(details.message)}</div>}
+        {state === "success" && <div className={partial ? "text-xs text-amber-700 dark:text-amber-300" : "text-xs text-emerald-700 dark:text-emerald-300"}>{partial ? "Completed with skipped or blocked items. Review the reported outcomes before retrying." : "The confirmed action completed. Any blocked items are reported separately."}</div>}
+        {canConfirm && state !== "success" && (
+          <Button type="button" size="sm" className="w-fit" disabled={state === "submitting"} onClick={() => submitConfirmation(state === "second")}>
+            {state === "second" ? "Confirm Call Again" : state === "error" ? "Retry confirmation" : "Confirm and run"}
+          </Button>
+        )}
+        {confirmation?.expires_at && state === "idle" && <div className="text-[11px] text-muted-foreground">Approval expires {new Date(confirmation.expires_at).toLocaleTimeString()}.</div>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function CallAnalyticsCard({ result }: { result?: ToolResult }) {
+  const value = (result ?? {}) as Record<string, unknown>;
+  const analytics = (value.analytics ?? value) as Record<string, unknown>;
+  const calls = Array.isArray(analytics.calls) ? analytics.calls : [];
+  return (
+    <Card size="sm" className="overflow-hidden border-muted-foreground/20">
+      <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50"><CardTitle className="text-sm font-semibold flex items-center gap-2"><BarChart3 className="w-4 h-4 text-primary" />Call intelligence</CardTitle></CardHeader>
+      <CardContent className="p-4 text-sm flex flex-col gap-3">
+        {value.error ? <div className="text-destructive text-xs">{String(value.message ?? "Call details are unavailable.")}</div> : <>
+          <div className="grid grid-cols-2 gap-2 text-xs"><span>Total calls: {String(analytics.totalCalls ?? "0")}</span><span>Answer rate: {typeof analytics.answerRate === "number" ? `${Math.round(analytics.answerRate * 100)}%` : "-"}</span><span>Talk time: {Math.round(Number(analytics.totalDurationSeconds ?? 0) / 60)} min</span><span>Platform credits: {String(value.platform_credits_remaining ?? "-")}</span></div>
+          <div className="text-xs text-muted-foreground">Bolna provider spend — billed directly by Bolna</div>
+          {Array.isArray(analytics.currencyTotals) && <div className="text-xs">{analytics.currencyTotals.map((row) => { const cost = row as Record<string, unknown>; return <div key={String(cost.currency)}>{String(cost.currency)} {String(cost.costMinorUnits)} minor units</div>; })}</div>}
+          <div className="text-xs text-muted-foreground">SalesEngAI platform credits are separate from Bolna provider spend.</div>
+          {calls.length > 0 && <div className="text-xs text-muted-foreground">Showing {calls.length} call record{calls.length === 1 ? "" : "s"}.</div>}
+        </>}
+      </CardContent>
+    </Card>
+  );
 }
 
 /** A single specialist delegation: badge + summary + its nested tool outputs. */
@@ -721,6 +879,7 @@ function AutomationCard({ result }: { result?: AutomationResult }) {
 }
 
 function WebSearchCard({ result }: { result: WebSearchResult }) {
+  const isApollo = result.sourceUsed === "apollo";
   return (
     <Card
       size="sm"
@@ -729,29 +888,99 @@ function WebSearchCard({ result }: { result: WebSearchResult }) {
       <CardHeader className="px-4 py-3 bg-muted/30 border-b border-border/50">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
           <Globe className="w-4 h-4 text-primary" />
-          Found {result.count} candidate{result.count === 1 ? "" : "s"}
-          {result.using_mock_data && (
+          <span>
+            Found {result.count} convertible lead{result.count === 1 ? "" : "s"}
+          </span>
+          {isApollo ? (
+            <Badge
+              variant="outline"
+              className="ml-auto align-middle text-[10px] bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+            >
+              Apollo B2B
+            </Badge>
+          ) : result.using_mock_data ? (
             <Badge
               variant="secondary"
               className="ml-auto align-middle text-[10px]"
             >
               demo data
             </Badge>
-          )}
+          ) : result.sourceUsed === "web_signal" ? (
+            <Badge
+              variant="secondary"
+              className="ml-auto align-middle text-[10px]"
+            >
+              web signals
+            </Badge>
+          ) : null}
         </CardTitle>
       </CardHeader>
       <CardContent className="p-4">
         <ul className="flex flex-col gap-3">
-          {result.candidates.slice(0, 8).map((c, i) => (
-            <li key={c.id ?? i} className="flex flex-col group">
-              <span className="font-medium group-hover:text-primary transition-colors">
-                {c.name}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                {c.title} · {c.company}
-              </span>
-            </li>
-          ))}
+          {result.candidates.slice(0, 8).map((c, i) => {
+            const score = c.convertibilityScore;
+            return (
+              <li
+                key={c.id ?? i}
+                className="flex flex-col gap-1 p-2 rounded-md bg-muted/20 border border-border/40 hover:border-border/70 transition-colors group"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-sm group-hover:text-primary transition-colors">
+                    {c.name}
+                  </span>
+                  {typeof score === "number" && (
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "text-[10px] font-semibold",
+                        score >= 80
+                          ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                          : score >= 60
+                            ? "bg-amber-500/15 text-amber-400 border-amber-500/30"
+                            : "bg-muted text-muted-foreground border-border",
+                      )}
+                    >
+                      {score >= 80 ? "🔥 " : score >= 60 ? "⚡ " : ""}
+                      {score}/100
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {c.title} · {c.company}
+                </div>
+                {c.primaryTrigger && (
+                  <div className="text-[11px] text-primary/90 flex items-center gap-1.5 mt-0.5">
+                    <span className="text-xs">🎯</span>
+                    <span className="font-medium">{c.primaryTrigger}</span>
+                  </div>
+                )}
+                {c.signals && (
+                  <div className="flex flex-wrap gap-1.5 mt-1">
+                    {c.signals.recentFunding && (
+                      <span className="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                        💰 {c.signals.recentFunding.amount || "Recent funding"}
+                      </span>
+                    )}
+                    {c.signals.hasActiveHiring && (
+                      <span className="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        📈 Hiring surge
+                      </span>
+                    )}
+                    {c.signals.isNewInRole && (
+                      <span className="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                        ✨ New in role
+                      </span>
+                    )}
+                  </div>
+                )}
+                {c.suggestedHook && (
+                  <div className="text-[11px] text-muted-foreground italic border-l-2 border-primary/30 pl-2 mt-1">
+                    &ldquo;{c.suggestedHook}&rdquo;
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
         {result.candidates.length > 8 && (
           <div className="text-xs text-muted-foreground mt-4 pt-3 border-t border-border/50 text-center">

@@ -19,6 +19,14 @@
     {
       "path": "/api/cron/run-automations",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/reconcile-voice-calls",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/deliver-handoff-notifications",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

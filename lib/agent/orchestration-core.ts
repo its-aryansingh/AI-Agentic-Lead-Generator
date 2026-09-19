@@ -45,6 +45,7 @@ export const SPECIALIST_META: Record<SpecialistName, SpecialistMeta> = {
 - For general ICPs use web_search. For developer / maker / indie-hacker ICPs use public_source_search (github, producthunt, hn_algolia).
 - If the instruction hands you an explicit list of named people, use add_named_prospects instead of searching.
 - Return a concise tally: how many candidates you found and a 3-5 item sample (name — title — company). Do NOT enrich, draft, or send. Do NOT invent people; only report what the tools returned.
+- Return the complete count of candidates found and list all discovered companies and candidates with their company name, domain/website, and role/location. Do NOT artificially truncate to 3-5 items if more were found — report the full list (up to the requested count) so the user can review them all. Do NOT enrich, draft, or send. Do NOT invent people; only report what the tools returned.
 - If a search comes back empty, say so plainly.`,
   },
 

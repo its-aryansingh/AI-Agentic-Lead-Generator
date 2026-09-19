@@ -1,12 +1,13 @@
 "use client"
 
 import * as React from "react"
+import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { EmptyState } from "@/components/ui/empty-state"
 import { Clock, Send, Eye, MessageSquare, AlertTriangle, UserX, LayoutDashboard } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { updateRecipientStatus } from "../actions"
+import { updateRecipientStatus } from "@/app/app/actions"
 import { AnimatedCounter } from "@/components/ui/animated-counter"
 
 export interface Recipient {
@@ -28,9 +29,11 @@ const COLUMNS = [
 ]
 
 export function PipelineClient({ initialRecipients }: { initialRecipients: Recipient[] }) {
+  const router = useRouter()
   const [recipients, setRecipients] = React.useState(initialRecipients)
   const [draggedId, setDraggedId] = React.useState<string | null>(null)
   const [dragOverCol, setDragOverCol] = React.useState<string | null>(null)
+  React.useEffect(() => { const timer = window.setInterval(() => { if (document.visibilityState === "visible") router.refresh() }, 30_000); return () => window.clearInterval(timer) }, [router])
 
   const handleDragStart = (e: React.DragEvent, id: string) => {
     setDraggedId(id)

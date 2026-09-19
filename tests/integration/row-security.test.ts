@@ -60,8 +60,8 @@ describe("row security (real Postgres, no RLS)", { skip }, () => {
 
     jobA = (await admin.from("jobs").insert({ user_id: ALICE, input_source: "chat_search", status: "processing" }).select("id").single()).data.id
     jobM = (await admin.from("jobs").insert({ user_id: MALLORY, input_source: "chat_search", status: "processing" }).select("id").single()).data.id
-    pA = (await admin.from("prospects").insert({ job_id: jobA, input_source: "chat_search", input_company: "AcmeCo", stage: "contacted" }).select("id").single()).data.id
-    pM = (await admin.from("prospects").insert({ job_id: jobM, input_source: "chat_search", input_company: "MalCo", stage: "contacted" }).select("id").single()).data.id
+    pA = (await admin.from("prospects").insert({ user_id: ALICE, job_id: jobA, input_source: "chat_search", input_company: "AcmeCo", stage: "contacted" }).select("id").single()).data.id
+    pM = (await admin.from("prospects").insert({ user_id: MALLORY, job_id: jobM, input_source: "chat_search", input_company: "MalCo", stage: "contacted" }).select("id").single()).data.id
   })
 
   after(async () => { if (db) await db.getPool().end() })
@@ -132,7 +132,30 @@ describe("row security (real Postgres, no RLS)", { skip }, () => {
       assert.equal(r.data.user_id, ALICE)
     })
     it("refuses a child row under another tenant's parent", async () => {
-      const r = await alice.from("prospects").insert({ job_id: jobM, input_source: "chat_search" })
+      // sequence_steps is still parent-owned, so this is the case the
+      // SQL guard covers.
+      const seqM = (await admin.from("sequences")
+        .insert({ user_id: MALLORY, name: "mal" }).select("id").single()).data.id
+      const r = await alice.from("sequence_steps").insert({ sequence_id: seqM, step_index: 1 })
+      assert.notEqual(r.error, null)
+    })
+
+    it("stamps prospects.user_id rather than trusting job_id", async () => {
+      // 0004 made prospects column-owned. A row naming another tenant's
+      // job now gets the SESSION user's id stamped on it, so it lands in
+      // the caller's own tenancy and is not a leak — and the composite
+      // FK prospects(id, user_id) keeps every child row consistent with
+      // whichever tenancy the parent ended up in.
+      const r = await alice.from("prospects")
+        .insert({ job_id: jobA, input_source: "chat_search", input_company: "Stamped" })
+        .select("user_id").single()
+      assert.equal(r.error, null)
+      assert.equal(r.data.user_id, ALICE)
+    })
+
+    it("refuses a prospect explicitly owned by someone else", async () => {
+      const r = await alice.from("prospects")
+        .insert({ user_id: MALLORY, job_id: jobM, input_source: "chat_search" })
       assert.notEqual(r.error, null)
     })
   })

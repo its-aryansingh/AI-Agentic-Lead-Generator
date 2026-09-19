@@ -10,6 +10,7 @@ import {
   purchaseCreditPackAction,
 } from "@/app/app/settings/billing/actions"
 import Script from "next/script"
+import { useRouter } from "next/navigation"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Check, Sparkles, Loader2, IndianRupee, DollarSign, Zap, Building2, Mail } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -27,6 +28,7 @@ export function BillingClient({
   currentPlan: PlanType
   creditsRemaining: number
 }) {
+  const router = useRouter()
   const [loadingPlan, setLoadingPlan] = useState<PlanType | null>(null)
   const [loadingPack, setLoadingPack] = useState<CreditPackId | null>(null)
   const [currency, setCurrency] = useState<"INR" | "USD">("USD")
@@ -46,7 +48,7 @@ export function BillingClient({
           return
         }
         if (sub.mock) {
-          window.location.assign("/app/settings/billing?success=true")
+          router.push("/app/settings/billing?success=true")
           return
         }
         const options = {
@@ -54,9 +56,7 @@ export function BillingClient({
           subscription_id: sub.subscriptionId,
           name: "SalesEngAI",
           description: `${PLANS[plan].name} — monthly (UPI AutoPay)`,
-          handler: function () {
-            window.location.href = "/app/settings/billing?success=true"
-          },
+          handler: () => router.push("/app/settings/billing?success=true"),
           prefill: {
             email: sub.userEmail,
           },
@@ -79,9 +79,7 @@ export function BillingClient({
             plan: order.plan,
             userId: order.userId,
           },
-          handler: function () {
-            window.location.href = "/app/settings/billing?success=true"
-          },
+          handler: () => router.push("/app/settings/billing?success=true"),
           prefill: {
             email: order.userEmail,
           },
@@ -93,8 +91,7 @@ export function BillingClient({
         const rzp = new window.Razorpay(options)
         rzp.open()
       }
-    } catch (error) {
-      console.error(error)
+    } catch {
       setErrorMessage("Checkout failed. Please try again.")
     } finally {
       if (currency === "INR") {
@@ -127,9 +124,7 @@ export function BillingClient({
             packId,
             userId: order.userId,
           },
-          handler: function () {
-            window.location.href = "/app/settings/billing?pack_success=true"
-          },
+          handler: () => router.push("/app/settings/billing?pack_success=true"),
           prefill: {
             email: order.userEmail,
           },
@@ -140,8 +135,7 @@ export function BillingClient({
         const rzp = new window.Razorpay(options)
         rzp.open()
       }
-    } catch (error) {
-      console.error(error)
+    } catch {
       setErrorMessage("Credit purchase failed. Please try again.")
     } finally {
       if (currency === "INR") {

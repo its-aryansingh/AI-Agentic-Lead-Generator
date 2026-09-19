@@ -58,12 +58,14 @@ describe("enrichment data layer (real Postgres)", { skip }, () => {
       [JOB_A, ALICE, JOB_M, MALLORY],
     )
     await pool.query(
-      `insert into public.prospects(id,job_id,input_source,input_company,company_domain,
+      // user_id is NOT NULL from db/migrations/0004 onwards: prospects
+      // are owned by the column now, not only through the jobs join.
+      `insert into public.prospects(id,job_id,user_id,input_source,input_company,company_domain,
                                     email,email_source,email_confidence) values
-         ($1,$2,'chat_search','Acme','acme.in',null,null,null),
-         ($3,$2,'chat_search','Guessy','guessy.in','guess@guessy.in','pattern_guessed','risky'),
-         ($4,$5,'chat_search','Mallory','mal.in',null,null,null)`,
-      [P_ACME, JOB_A, P_GUESS, P_MAL, JOB_M],
+         ($1,$2,$6,'chat_search','Acme','acme.in',null,null,null),
+         ($3,$2,$6,'chat_search','Guessy','guessy.in','guess@guessy.in','pattern_guessed','risky'),
+         ($4,$5,$7,'chat_search','Mallory','mal.in',null,null,null)`,
+      [P_ACME, JOB_A, P_GUESS, P_MAL, JOB_M, ALICE, MALLORY],
     )
   })
 

@@ -1,23 +1,19 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { addManualLead, importLeadCsv } from "@/app/app/leads/actions";
+import { importLeadCsv } from "@/app/app/leads/actions";
 import { createClient } from "@/lib/supabase/server";
 import { LeadsTableClient, type LeadRow } from "@/app/app/leads/leads-table-client";
-import { UserPlus, Upload } from "lucide-react";
-
-
-// Every page under /app reads the session cookie, so none of them can
-// be statically prerendered. Two earlier commits in this repo exist
-// only to add this line to the other dashboard routes after the
-// build crashed on them; these pages arrived from SalesEngAIMVP
-// without it.
-export const dynamic = "force-dynamic"
+import { RefreshCw, Upload } from "lucide-react";
+import { CrmSyncDialog } from "@/app/app/leads/crm-sync-dialog";
+import { ManualLeadForm } from "@/app/app/leads/manual-lead-form";
 
 const errors: Record<string, string> = {
   missing_csv: "Choose a CSV file first.",
   csv_too_large: "CSV files must be 2 MB or smaller.",
   no_valid_rows: "No usable leads were found. Each row needs a name.",
+  duplicate_contacts:
+    "The CSV contains contacts that already exist. Review or deduplicate the file before importing it.",
 };
 
 export default async function LeadsPage({
@@ -33,24 +29,31 @@ export default async function LeadsPage({
 
   let leads: LeadRow[] = [];
   if (user) {
-    const { data: userJobs } = await supabase
-      .from("jobs")
-      .select("id")
-      .eq("user_id", user.id);
-    const jobIds = (userJobs ?? []).map((j) => j.id);
+    const { data } = await supabase
+      .from("prospects")
+      .select(
+        "id,input_name,input_company,input_title,email,phone,lead_status,next_action,next_action_at,email_subject,research_summary,created_at,company_domain,enrichment_status",
+      )
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
 
-    if (jobIds.length > 0) {
-      const { data } = await supabase
-        .from("prospects")
-        .select(
-          "id,input_name,input_company,input_title,email,phone,lead_status,next_action,next_action_at,email_subject,research_summary,created_at",
-        )
-        .in("job_id", jobIds)
-        .order("created_at", { ascending: false });
-
-      leads = (data ?? []) as LeadRow[];
-    }
+    leads = (data ?? []) as LeadRow[];
   }
+
+  const { data: connections } = user
+    ? await supabase
+        .from("crm_connections")
+        .select("provider")
+        .eq("user_id", user.id)
+        .eq("status", "active")
+    : { data: [] };
+
+  const connectedProviders = (connections ?? [])
+    .map((row) => row.provider)
+    .filter(
+      (value): value is "hubspot" | "zoho" =>
+        value === "hubspot" || value === "zoho",
+    );
 
   return (
     <div className="flex-1 flex flex-col min-w-0">
@@ -72,64 +75,21 @@ export default async function LeadsPage({
           )}
 
           {/* Quick Intake Section */}
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-3">
+            <ManualLeadForm />
+
             <Card size="sm">
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-sm font-semibold">
-                  <UserPlus className="size-4 text-primary" /> Add single lead
+                  <RefreshCw className="size-4 text-primary" /> Sync from CRM
                 </CardTitle>
               </CardHeader>
-              <CardContent>
-                <form action={addManualLead} className="flex flex-col gap-2.5">
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      name="name"
-                      required
-                      maxLength={200}
-                      placeholder="Full name *"
-                      className="h-8 text-xs"
-                    />
-                    <Input
-                      name="company"
-                      maxLength={200}
-                      placeholder="Company"
-                      className="h-8 text-xs"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      name="title"
-                      maxLength={200}
-                      placeholder="Job title"
-                      className="h-8 text-xs"
-                    />
-                    <Input
-                      name="email"
-                      type="email"
-                      maxLength={320}
-                      placeholder="Work email"
-                      className="h-8 text-xs"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input
-                      name="phone"
-                      maxLength={40}
-                      placeholder="Phone (+country code)"
-                      className="h-8 text-xs"
-                    />
-                    <Input
-                      name="linkedin_url"
-                      type="url"
-                      maxLength={1000}
-                      placeholder="LinkedIn URL"
-                      className="h-8 text-xs"
-                    />
-                  </div>
-                  <Button type="submit" size="sm" className="mt-1 text-xs h-8">
-                    Add lead
-                  </Button>
-                </form>
+              <CardContent className="space-y-3">
+                <p className="text-xs text-muted-foreground">
+                  Preview HubSpot or Zoho contacts before a safe, audited
+                  import.
+                </p>
+                <CrmSyncDialog connectedProviders={connectedProviders} />
               </CardContent>
             </Card>
 
@@ -144,7 +104,10 @@ export default async function LeadsPage({
                   Upload up to 1,000 rows (2 MB max). Columns: Name, Company,
                   Title, LinkedIn, Email, and Phone.
                 </p>
-                <form action={importLeadCsv} className="flex flex-col gap-3 mt-3">
+                <form
+                  action={importLeadCsv}
+                  className="flex flex-col gap-3 mt-3"
+                >
                   <Input
                     name="csv"
                     type="file"

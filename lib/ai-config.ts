@@ -104,16 +104,18 @@ export async function deductCreditsForAiOp(opts: {
   purpose: AiPurpose;
   jobId?: string;
   operationLabel?: string;
+  idempotencyKey?: string;
 }): Promise<void> {
-  const { userId, modelId, purpose, jobId, operationLabel } = opts;
+  const { userId, modelId, purpose, jobId, operationLabel, idempotencyKey } = opts;
   const credits = creditsForOperation(modelId, purpose);
   if (credits <= 0) return;
   try {
     await deductCredits({
       userId,
       count: credits,
-      jobId: jobId ?? "system",
+      jobId,
       reason: operationLabel ?? `ai_op_${purpose}_${modelId}`,
+      idempotencyKey: idempotencyKey ?? crypto.randomUUID(),
     });
   } catch {}
 }
@@ -172,6 +174,7 @@ export async function recordAiUsage(input: {
         provider_request_id: input.requestId ?? null,
         duration_ms: input.durationMs,
         error_code: input.errorCode ?? null,
+        credit_cost: input.creditCost ?? null,
       });
   } catch {}
 }

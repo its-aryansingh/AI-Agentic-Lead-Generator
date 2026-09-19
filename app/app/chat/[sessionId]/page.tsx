@@ -1,28 +1,27 @@
-import { notFound } from "next/navigation"
+import { notFound } from "next/navigation";
 
-import { createClient } from "@/lib/supabase/server"
-import { ChatClient } from "../components/chat-client"
+import { createClient } from "@/lib/supabase/server";
+import { ChatClient } from "@/app/app/chat/components/chat-client";
 
 interface ChatMessageRow {
-  id: string
-  role: "user" | "assistant" | "tool" | "system"
-  content: Record<string, unknown>
-  created_at: string
+  id: string;
+  role: "user" | "assistant" | "tool" | "system";
+  content: Record<string, unknown>;
+  created_at: string;
 }
 
 interface PersistedToolCall {
-  toolName: string
-  result?: unknown
+  toolName: string;
+  state?: "running" | "result";
+  result?: unknown;
 }
 
 interface InitialMessage {
-  id: string
-  role: "user" | "assistant"
-  text: string
-  toolCalls?: PersistedToolCall[]
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  toolCalls?: PersistedToolCall[];
 }
-
-export const dynamic = "force-dynamic"
 
 /**
  * /app/chat/[sessionId] — resume a previous chat.
@@ -34,13 +33,13 @@ export const dynamic = "force-dynamic"
 export default async function ResumeChatPage({
   params,
 }: {
-  params: Promise<{ sessionId: string }>
+  params: Promise<{ sessionId: string }>;
 }) {
-  const { sessionId } = await params
-  const supabase = await createClient()
+  const { sessionId } = await params;
+  const supabase = await createClient();
   const {
     data: { user },
-  } = await supabase.auth.getUser()
+  } = await supabase.auth.getUser();
 
   // Confirm the session belongs to this user (RLS would block but a
   // 404 is friendlier than an empty page).
@@ -48,36 +47,35 @@ export default async function ResumeChatPage({
     .from("chat_sessions")
     .select("id,title,user_id")
     .eq("id", sessionId)
-    .maybeSingle()
-  if (!session) notFound()
+    .maybeSingle();
+  if (!session) notFound();
 
   const { data: rows } = await supabase
     .from("chat_messages")
     .select("id,role,content,created_at")
     .eq("session_id", sessionId)
-    .order("created_at", { ascending: true })
+    .order("created_at", { ascending: true });
 
   const initialMessages: InitialMessage[] = (rows ?? [])
     .filter(
-      (r): r is ChatMessageRow =>
-        r.role === "user" || r.role === "assistant",
+      (r): r is ChatMessageRow => r.role === "user" || r.role === "assistant",
     )
     .map((r) => ({
       id: r.id,
       role: r.role as "user" | "assistant",
       text: extractText(r.content),
       toolCalls: extractToolCalls(r.content),
-    }))
+    }));
 
-  let creditsRemaining = 25
+  let creditsRemaining = 25;
   if (user) {
     const { data } = await supabase
       .from("users")
       .select("credits_remaining")
       .eq("id", user.id)
-      .maybeSingle()
+      .maybeSingle();
     if (data?.credits_remaining !== undefined) {
-      creditsRemaining = data.credits_remaining as number
+      creditsRemaining = data.credits_remaining as number;
     }
   }
 
@@ -91,9 +89,12 @@ export default async function ResumeChatPage({
           credits: {creditsRemaining} / free tier
         </span>
       </header>
-      <ChatClient initialSessionId={sessionId} initialMessages={initialMessages} />
+      <ChatClient
+        initialSessionId={sessionId}
+        initialMessages={initialMessages}
+      />
     </div>
-  )
+  );
 }
 
 /**
@@ -102,27 +103,37 @@ export default async function ResumeChatPage({
  * onFinish persist as { text }. Handle both shapes defensively.
  */
 function extractText(content: Record<string, unknown>): string {
-  if (typeof content.text === "string") return content.text
-  const parts = content.parts as Array<{ type: string; text?: string }> | undefined
+  if (typeof content.text === "string") return content.text;
+  const parts = content.parts as
+    | Array<{ type: string; text?: string }>
+    | undefined;
   if (Array.isArray(parts)) {
     return parts
-      .map((p) => (p.type === "text" && typeof p.text === "string" ? p.text : ""))
+      .map((p) =>
+        p.type === "text" && typeof p.text === "string" ? p.text : "",
+      )
       .filter(Boolean)
-      .join("")
+      .join("");
   }
-  return ""
+  return "";
 }
 
-function extractToolCalls(content: Record<string, unknown>): PersistedToolCall[] {
-  const raw = content.toolCalls
-  if (!Array.isArray(raw)) return []
+function extractToolCalls(
+  content: Record<string, unknown>,
+): PersistedToolCall[] {
+  const raw = content.toolCalls;
+  if (!Array.isArray(raw)) return [];
   return raw
     .filter((c): c is { toolName: string; result?: unknown } => {
       return (
         typeof c === "object" &&
         c !== null &&
         typeof (c as { toolName?: unknown }).toolName === "string"
-      )
+      );
     })
-    .map((c) => ({ toolName: c.toolName, result: c.result }))
+    .map((c) => ({
+      toolName: c.toolName,
+      state: "result" as const,
+      result: c.result,
+    }));
 }

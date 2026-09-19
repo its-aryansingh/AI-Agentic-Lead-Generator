@@ -1,15 +1,11 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
-
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-});
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 export const metadata: Metadata = {
-  title: "LeadGenAI - Smart Outbound Prospecting",
-  description: "AI-powered prospect research tool for SMB sales teams.",
+  title: "Aravya SalesEngAI - Autonomous AI Sales Outreach Platform",
+  description:
+    "Autonomous B2B AI sales development, lead qualification, and outreach execution platform.",
 };
 
 export default function RootLayout({
@@ -18,9 +14,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} h-full antialiased`}>
+    <html lang="en" className="h-full antialiased">
       <body className="min-h-full flex flex-col font-sans">
-        {children}
+        <TooltipProvider>{children}</TooltipProvider>
       </body>
     </html>
   );
