@@ -92,7 +92,10 @@ export function pickLatestMigration(filenames: string[]): string | null {
 
 export interface HealthSummary {
   ok: boolean;
-  service: "aravya_salesengai";
+  // This deployment is LeadGenAI. SalesEngAIMVP hard-codes its own
+  // name here; keeping that would have renamed the service in every
+  // health response and in anything monitoring it.
+  service: "leadgenai";
   version: string;
   timestamp: string;
   uptime_seconds: number;
