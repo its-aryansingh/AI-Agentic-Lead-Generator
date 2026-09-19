@@ -14,23 +14,20 @@
 
 import { tool, type ToolSet } from "ai";
 import { z } from "zod";
-
 import {
-  handleAddNamedProspects,
-  handleClarify,
-  handleDraftReply,
-  handleEnrichIntakeJob,
-  handleEnrichLead,
-  handleEnrichProspect,
-  handleLaunchCampaign,
-  handleListIntakeJobs,
-  handlePublicSourceSearch,
-  handlePushToCrm,
-  handleSearchLeads,
-  handleSaveCandidatesToLeads,
-  handleStartBulkJob,
-  handleWebSearch,
-} from "@/lib/agent/tool-handlers";
+  callDetailsSchema,
+  crmSyncSchema,
+  followupSchema,
+  leadFiltersSchema,
+  qualificationBatchSchema,
+  triggerOutreachSchema,
+  voiceAgentSchema,
+} from "@/lib/agent/sales-tool-schemas";
+
+// Keep the schema-only tool definitions importable by Node's native test
+// runner. The server-only handlers use Next aliases and load only when an
+// authenticated tool invocation actually executes.
+const loadToolHandlers = () => import("./tool-handlers");
 
 export interface ToolContext {
   userId: string;
@@ -55,9 +52,10 @@ export const webSearchTool = (ctx: ToolContext) =>
       target_role: z.string().optional(),
       industry: z.string().optional(),
       location: z.string().optional(),
-      max_results: z.number().int().min(5).max(50).default(15),
+      max_results: z.number().int().min(1).max(50).default(25),
     }),
-    execute: async (params) => handleWebSearch(params, ctx),
+    execute: async (params) =>
+      (await loadToolHandlers()).handleWebSearch(params, ctx),
   });
 
 export const publicSourceSearchTool = (ctx: ToolContext) =>
@@ -69,7 +67,8 @@ export const publicSourceSearchTool = (ctx: ToolContext) =>
       query: z.string(),
       max_results: z.number().int().min(5).max(50).default(15),
     }),
-    execute: async (params) => handlePublicSourceSearch(params, ctx),
+    execute: async (params) =>
+      (await loadToolHandlers()).handlePublicSourceSearch(params, ctx),
   });
 
 export const enrichProspectTool = (ctx: ToolContext) =>
@@ -83,13 +82,14 @@ export const enrichProspectTool = (ctx: ToolContext) =>
       company_domain: z.string().optional(),
       linkedin_url: z.string().url().optional(),
     }),
-    execute: async (params) => handleEnrichProspect(params, ctx),
+    execute: async (params) =>
+      (await loadToolHandlers()).handleEnrichProspect(params, ctx),
   });
 
 export const saveCandidatesToLeadsTool = (ctx: ToolContext) =>
   tool({
     description:
-      "Save discovered or explicitly named prospects into the user's Leads section without enrichment or credit usage. You MUST call this before claiming that candidates were added to Leads.",
+      "Save discovered or explicitly named prospects into the user's Leads section without enrichment or credit usage. Can save an explicit array of prospects, or set save_all_staged: true to commit all candidates found in this session.",
     inputSchema: z.object({
       prospects: z
         .array(
@@ -98,12 +98,20 @@ export const saveCandidatesToLeadsTool = (ctx: ToolContext) =>
             company: z.string().optional(),
             title: z.string().optional(),
             linkedin_url: z.string().url().optional(),
+            company_domain: z.string().optional(),
           }),
         )
-        .min(1)
-        .max(50),
+        .max(50)
+        .optional(),
+      save_all_staged: z
+        .boolean()
+        .optional()
+        .describe(
+          "Set to true to commit all staged prospect candidates discovered during this chat session into the Leads table.",
+        ),
     }),
-    execute: async (params) => handleSaveCandidatesToLeads(params, ctx),
+    execute: async (params) =>
+      (await loadToolHandlers()).handleSaveCandidatesToLeads(params, ctx),
   });
 
 export const clarifyTool = (_ctx: ToolContext) =>
@@ -114,7 +122,7 @@ export const clarifyTool = (_ctx: ToolContext) =>
       question: z.string(),
       suggested_answers: z.array(z.string()).optional(),
     }),
-    execute: async (params) => handleClarify(params),
+    execute: async (params) => (await loadToolHandlers()).handleClarify(params),
   });
 
 export const addNamedProspectsTool = (ctx: ToolContext) =>
@@ -134,7 +142,8 @@ export const addNamedProspectsTool = (ctx: ToolContext) =>
         .min(1)
         .max(100),
     }),
-    execute: async (params) => handleAddNamedProspects(params, ctx),
+    execute: async (params) =>
+      (await loadToolHandlers()).handleAddNamedProspects(params, ctx),
   });
 
 export const startBulkJobTool = (ctx: ToolContext) =>
@@ -145,7 +154,8 @@ export const startBulkJobTool = (ctx: ToolContext) =>
       candidate_ids: z.array(z.string().uuid()).optional(),
       draft_email: z.boolean().default(true),
     }),
-    execute: async (params) => handleStartBulkJob(params, ctx),
+    execute: async (params) =>
+      (await loadToolHandlers()).handleStartBulkJob(params, ctx),
   });
 
 export const launchCampaignTool = (ctx: ToolContext) =>
@@ -197,7 +207,8 @@ export const launchCampaignTool = (ctx: ToolContext) =>
           "Template language code (e.g. 'en', 'hi', 'en_US'). Defaults to 'en'. Used only when channel='whatsapp'.",
         ),
     }),
-    execute: async (params) => handleLaunchCampaign(params, ctx),
+    execute: async (params) =>
+      (await loadToolHandlers()).handleLaunchCampaign(params, ctx),
   });
 
 export const pushToCrmTool = (ctx: ToolContext) =>
@@ -223,7 +234,8 @@ export const pushToCrmTool = (ctx: ToolContext) =>
           "Which CRM to push to. 'hubspot' (default) uses HUBSPOT_API_KEY; 'zoho' uses ZOHO_REFRESH_TOKEN + ZOHO_CLIENT_ID + ZOHO_CLIENT_SECRET (+ optional ZOHO_REGION, default 'com', use 'in' for India accounts).",
         ),
     }),
-    execute: async (params) => handlePushToCrm(params, ctx),
+    execute: async (params) =>
+      (await loadToolHandlers()).handlePushToCrm(params, ctx),
   });
 
 export const draftReplyTool = (ctx: ToolContext) =>
@@ -238,7 +250,8 @@ export const draftReplyTool = (ctx: ToolContext) =>
           "The reply_classifications row id (from the Inbox / hot-reply alert).",
         ),
     }),
-    execute: async (params) => handleDraftReply(params, ctx),
+    execute: async (params) =>
+      (await loadToolHandlers()).handleDraftReply(params, ctx),
   });
 
 export const listIntakeJobsTool = (ctx: ToolContext) =>
@@ -246,7 +259,7 @@ export const listIntakeJobsTool = (ctx: ToolContext) =>
     description:
       "List leads that were added via Lead Intake (manual entry or CSV upload) and have not yet been enriched with a drafted email. Use this when the user says they added leads via Lead Intake and wants to send emails — check here first to find the job_id, then call enrich_intake_job.",
     inputSchema: z.object({}),
-    execute: async () => handleListIntakeJobs(ctx),
+    execute: async () => (await loadToolHandlers()).handleListIntakeJobs(ctx),
   });
 
 export const enrichIntakeJobTool = (ctx: ToolContext) =>
@@ -267,39 +280,74 @@ export const enrichIntakeJobTool = (ctx: ToolContext) =>
           "Whether to also AI-draft a personalized cold email (default: true).",
         ),
     }),
-    execute: async (params) => handleEnrichIntakeJob(params, ctx),
+    execute: async (params) =>
+      (await loadToolHandlers()).handleEnrichIntakeJob(params, ctx),
   });
 
 export const searchLeadsTool = (ctx: ToolContext) =>
   tool({
     description:
-      "Search the user's existing leads in the database by name, company, email, status (e.g. 'qualified', 'contacted'), qualification bucket ('hot', 'warm'), or inbound replies. Always call this when the user asks about existing leads, pipeline status, recent replies, or qualified leads.",
-    inputSchema: z.object({
-      query: z
-        .string()
-        .optional()
-        .describe(
-          "Search term to match against lead name, company, email, title, or reply content (e.g. 'Jane', 'Acme', 'qualified', 'replies').",
-        ),
-      lead_status: z
-        .string()
-        .optional()
-        .describe(
-          "Filter by lead status: 'new', 'contacted', 'engaged', 'qualified', 'disqualified', 'converted'.",
-        ),
-      qualification_bucket: z
-        .string()
-        .optional()
-        .describe("Filter by qualification bucket: 'hot', 'warm', 'cold'."),
-      only_with_replies: z
-        .boolean()
-        .optional()
-        .describe(
-          "Set to true whenever the request mentions replies, including compound requests such as qualified leads from recent replies.",
-        ),
-      limit: z.number().int().min(1).max(50).default(25).optional(),
-    }),
-    execute: async (params) => handleSearchLeads(params, ctx),
+      "Search and filter the user's existing leads in the database. Supports filtering by name/company/email query, call status (e.g. uncalled or unanswered leads), date added (e.g. added today), lead status, and replies. Always use this when the user asks to find, list, or call existing leads.",
+    inputSchema: leadFiltersSchema,
+    execute: async (params) =>
+      (await loadToolHandlers()).handleSearchLeads(params, ctx),
+  });
+
+export const createOrUpdateVoiceAgentTool = (ctx: ToolContext) =>
+  tool({
+    description:
+      "Preview a managed Bolna qualification-agent configuration. Only the confirmation card can apply it; provider credentials remain server-side.",
+    inputSchema: voiceAgentSchema,
+    execute: async (params) =>
+      (await loadToolHandlers()).handleCreateOrUpdateVoiceAgent(params, ctx),
+  });
+
+export const startQualificationCallsBatchTool = (ctx: ToolContext) =>
+  tool({
+    description:
+      "Preview the exact eligible and blocked lead set for qualification calls. Applying requires the dedicated confirmation card and never bypasses DNC, consent, phone validity, or calling hours.",
+    inputSchema: qualificationBatchSchema,
+    execute: async (params) =>
+      (await loadToolHandlers()).handleStartQualificationCallsBatch(
+        params,
+        ctx,
+      ),
+  });
+
+export const scheduleLeadFollowupTool = (ctx: ToolContext) =>
+  tool({
+    description:
+      "Preview an idempotent email or voice follow-up at an IANA-timezone-aware time. Applying requires the confirmation card.",
+    inputSchema: followupSchema,
+    execute: async (params) =>
+      (await loadToolHandlers()).handleScheduleLeadFollowup(params, ctx),
+  });
+
+export const syncCrmLeadsTool = (ctx: ToolContext) =>
+  tool({
+    description:
+      "Preview a pull from the tenant's connected HubSpot or Zoho CRM and show created, updated, and skipped estimates. Applying requires the confirmation card.",
+    inputSchema: crmSyncSchema,
+    execute: async (params) =>
+      (await loadToolHandlers()).handleSyncCrmLeads(params, ctx),
+  });
+
+export const getCallDetailsAndAnalyticsTool = (ctx: ToolContext) =>
+  tool({
+    description:
+      "Read tenant-scoped call details and analytics, including actual transcript, recording availability, outcomes, and Bolna provider costs. Never invent unavailable data.",
+    inputSchema: callDetailsSchema,
+    execute: async (params) =>
+      (await loadToolHandlers()).handleGetCallDetailsAndAnalytics(params, ctx),
+  });
+
+export const triggerOutreachRunTool = (ctx: ToolContext) =>
+  tool({
+    description:
+      "Preview exact outreach leads, channels, skips, platform-credit estimate, and approval requirements. Applying requires the confirmation card.",
+    inputSchema: triggerOutreachSchema,
+    execute: async (params) =>
+      (await loadToolHandlers()).handleTriggerOutreachRun(params, ctx),
   });
 
 export const enrichLeadTool = (ctx: ToolContext) =>
@@ -320,7 +368,88 @@ export const enrichLeadTool = (ctx: ToolContext) =>
         .default(true)
         .describe("Whether to draft a personalized qualification email."),
     }),
-    execute: async (params) => handleEnrichLead(params, ctx),
+    execute: async (params) =>
+      (await loadToolHandlers()).handleEnrichLead(params, ctx),
+  });
+
+export const enrichProspectsPublicTool = (ctx: ToolContext) =>
+  tool({
+    description:
+      "Crawl company websites using headless Playwright browser and OpenAI to extract public Indian phone numbers (+91), verified business emails, social links, and key people. Can enrich staged candidates from discovery, 1 lead, multiple lead IDs, or all un-enriched leads in the database.",
+    inputSchema: z.object({
+      enrich_staged: z
+        .boolean()
+        .optional()
+        .describe(
+          "Set to true to crawl websites and enrich all prospect candidates currently staged in the chat discovery session.",
+        ),
+      lead_ids: z
+        .array(z.string())
+        .optional()
+        .describe("List of lead/prospect IDs to enrich via web scraper."),
+      lead_id: z
+        .string()
+        .optional()
+        .describe("Single lead ID or name to enrich."),
+      domain: z
+        .string()
+        .optional()
+        .describe("Company domain to crawl (e.g. 'vrlgroup.in')."),
+      query: z
+        .string()
+        .optional()
+        .describe(
+          "Search term to find leads in database to enrich, e.g. 'transport'.",
+        ),
+      all_unenriched: z
+        .boolean()
+        .optional()
+        .describe("Set to true to enrich all un-enriched leads in database."),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(50)
+        .default(20)
+        .optional()
+        .describe("Max number of leads to enrich when matching multiple."),
+    }),
+    execute: async (params) =>
+      (await loadToolHandlers()).handleEnrichProspectsPublic(params, ctx),
+  });
+
+export const startQualificationCallTool = (ctx: ToolContext) =>
+  tool({
+    description:
+      "Start one real AI qualification call for an existing lead. First resolve an exact lead_id with search_leads. Use only after the user explicitly asks to call that lead and confirms lawful permission in the conversation.",
+    inputSchema: z.object({
+      lead_id: z
+        .string()
+        .uuid()
+        .describe("Exact owned lead ID from search_leads."),
+      confirmed_lawful_permission: z
+        .boolean()
+        .describe(
+          "True only when the user explicitly confirmed lawful permission to call in this conversation. Never infer it.",
+        ),
+      allow_override: z
+        .boolean()
+        .optional()
+        .describe(
+          "Only for an explicitly approved Call Again request; it never bypasses compliance.",
+        ),
+      override_reason: z.string().min(10).max(500).optional(),
+      approval_id: z
+        .string()
+        .uuid()
+        .optional()
+        .describe(
+          "Server-created, confirmed approval for this exact Call Again request.",
+        ),
+      idempotency_key: z.string().min(1).max(200).optional(),
+    }),
+    execute: async (params) =>
+      (await loadToolHandlers()).handleStartQualificationCall(params, ctx),
   });
 
 /**
@@ -344,7 +473,15 @@ export const TOOL_FACTORIES: Record<
   list_intake_jobs: listIntakeJobsTool,
   enrich_intake_job: enrichIntakeJobTool,
   search_leads: searchLeadsTool,
+  create_or_update_voice_agent: createOrUpdateVoiceAgentTool,
+  start_qualification_calls_batch: startQualificationCallsBatchTool,
+  schedule_lead_followup: scheduleLeadFollowupTool,
+  sync_crm_leads: syncCrmLeadsTool,
+  get_call_details_and_analytics: getCallDetailsAndAnalyticsTool,
+  trigger_outreach_run: triggerOutreachRunTool,
   enrich_lead: enrichLeadTool,
+  enrich_prospects_public: enrichProspectsPublicTool,
+  start_qualification_call: startQualificationCallTool,
 };
 
 /**
@@ -367,6 +504,14 @@ export function makeTools(ctx: ToolContext): ToolSet {
     list_intake_jobs: listIntakeJobsTool(ctx),
     enrich_intake_job: enrichIntakeJobTool(ctx),
     search_leads: searchLeadsTool(ctx),
+    create_or_update_voice_agent: createOrUpdateVoiceAgentTool(ctx),
+    start_qualification_calls_batch: startQualificationCallsBatchTool(ctx),
+    schedule_lead_followup: scheduleLeadFollowupTool(ctx),
+    sync_crm_leads: syncCrmLeadsTool(ctx),
+    get_call_details_and_analytics: getCallDetailsAndAnalyticsTool(ctx),
+    trigger_outreach_run: triggerOutreachRunTool(ctx),
     enrich_lead: enrichLeadTool(ctx),
+    enrich_prospects_public: enrichProspectsPublicTool(ctx),
+    start_qualification_call: startQualificationCallTool(ctx),
   };
 }

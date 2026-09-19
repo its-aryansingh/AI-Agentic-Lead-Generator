@@ -4,31 +4,24 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { decryptCredential } from "@/lib/credential-crypto";
-import { createBolnaCall } from "@/lib/providers/bolna";
 import { VoiceCallRefresh } from "@/app/app/leads/[id]/voice-call-refresh";
-import {
-  normalizeE164,
-  phoneHash,
-  isRetryableLocalVoiceFailure,
-  withinCallingHours,
-} from "@/lib/voice-compliance";
+import { VoiceCallOverride } from "@/app/app/leads/[id]/voice-call-override";
+import { isRetryableLocalVoiceFailure } from "@/lib/voice-compliance";
 import {
   pushCustomerCrm,
   type CustomerCrmCredentials,
 } from "@/lib/customer-crm";
 import { persistLeadHandoff } from "@/lib/lead-handoff";
 import {
+  startQualificationCall,
+  VoiceCallStartError,
+  type VoiceCallStartResult,
+} from "@/lib/voice/start-qualification-call";
+import {
   handleEnrichLead,
   handleLaunchCampaign,
 } from "@/lib/agent/tool-handlers";
-
-
-// Every page under /app reads the session cookie, so none of them can
-// be statically prerendered. Two earlier commits in this repo exist
-// only to add this line to the other dashboard routes after the
-// build crashed on them; these pages arrived from SalesEngAIMVP
-// without it.
-export const dynamic = "force-dynamic"
+import { enqueueProspectEnrichment } from "@/lib/enrichment/enqueue";
 
 const statuses = [
   "new",
@@ -72,7 +65,7 @@ async function syncLeadToCrm(formData: FormData) {
     const { data: lead } = await supabase
       .from("prospects")
       .select(
-        "id,input_name,input_company,input_title,email,linkedin_url,source_url,research_summary,handoff_summary,qualification_bucket,lead_status,next_action",
+        "id,input_name,input_company,input_title,email,input_linkedin_url,research_summary,handoff_summary,qualification_bucket,lead_status,next_action",
       )
       .eq("id", id)
       .maybeSingle();
@@ -104,10 +97,9 @@ async function syncLeadToCrm(formData: FormData) {
           last_name: name.join(" ") || undefined,
           company: lead.input_company ? String(lead.input_company) : undefined,
           job_title: lead.input_title ? String(lead.input_title) : undefined,
-          linkedin_url: lead.linkedin_url
-            ? String(lead.linkedin_url)
+          linkedin_url: lead.input_linkedin_url
+            ? String(lead.input_linkedin_url)
             : undefined,
-          source_url: lead.source_url ? String(lead.source_url) : undefined,
         },
         summary,
       );
@@ -199,20 +191,21 @@ async function draftEmail(formData: FormData) {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
+  let errorMsg: string | null = null;
   try {
     const res = await handleEnrichLead(
       { lead_id: id, draft_email: true },
       { userId: user.id, sessionId: `ui-${id}` },
     );
     if (res.error) {
-      redirect(`/app/leads/${id}?draft_error=${encodeURIComponent(res.error)}`);
+      errorMsg = res.error;
     }
   } catch (err) {
-    redirect(
-      `/app/leads/${id}?draft_error=${encodeURIComponent(
-        err instanceof Error ? err.message : "Drafting failed",
-      )}`,
-    );
+    errorMsg = err instanceof Error ? err.message : "Drafting failed";
+  }
+
+  if (errorMsg) {
+    redirect(`/app/leads/${id}?draft_error=${encodeURIComponent(errorMsg)}`);
   }
   redirect(`/app/leads/${id}?drafted=1`);
 }
@@ -239,6 +232,7 @@ async function approveAndSendEmail(formData: FormData) {
       .eq("id", id);
   }
 
+  let errorMsg: string | null = null;
   try {
     const res = await handleLaunchCampaign(
       {
@@ -250,19 +244,19 @@ async function approveAndSendEmail(formData: FormData) {
     );
 
     if (res.error) {
-      redirect(`/app/leads/${id}?send_error=${encodeURIComponent(res.error)}`);
+      errorMsg = res.error;
+    } else {
+      await supabase
+        .from("prospects")
+        .update({ lead_status: "contacted", next_action: "follow_up" })
+        .eq("id", id);
     }
-
-    await supabase
-      .from("prospects")
-      .update({ lead_status: "contacted", next_action: "follow_up" })
-      .eq("id", id);
   } catch (err) {
-    redirect(
-      `/app/leads/${id}?send_error=${encodeURIComponent(
-        err instanceof Error ? err.message : "Send failed",
-      )}`,
-    );
+    errorMsg = err instanceof Error ? err.message : "Send failed";
+  }
+
+  if (errorMsg) {
+    redirect(`/app/leads/${id}?send_error=${encodeURIComponent(errorMsg)}`);
   }
   redirect(`/app/leads/${id}?sent=1`);
 }
@@ -289,136 +283,67 @@ async function deleteCurrentLead(formData: FormData) {
 }
 async function startVoiceCall(formData: FormData) {
   "use server";
-  const id = String(formData.get("id") ?? ""),
-    consent = formData.get("voice_consent") === "on",
-    supabase = await createClient(),
-    {
-      data: { user },
-    } = await supabase.auth.getUser();
+  const id = String(formData.get("id") ?? "");
+  const consentConfirmed = formData.get("voice_consent") === "on";
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   if (!user) redirect("/login");
-  if (!consent) redirect(`/app/leads/${id}?voice_error=consent_required`);
-  const { data: lead } = await supabase
-    .from("prospects")
-    .select("id,input_name,input_company,input_title,phone,research_summary")
-    .eq("id", id)
-    .maybeSingle();
-  const phone = normalizeE164(String(lead?.phone ?? ""));
-  if (!lead || !phone) redirect(`/app/leads/${id}?voice_error=e164_required`);
-  const { data: connection } = await supabase
-    .from("voice_connections")
-    .select(
-      "id,encrypted_api_key,agent_id,from_phone_number,status,call_start_hour,call_end_hour,calling_timezone",
-    )
-    .eq("provider", "bolna")
-    .eq("status", "active")
-    .maybeSingle();
-  if (!connection) redirect(`/app/leads/${id}?voice_error=connect_bolna`);
-  if (
-    !withinCallingHours(
-      new Date(),
-      String(connection.calling_timezone),
-      Number(connection.call_start_hour),
-      Number(connection.call_end_hour),
-    )
-  )
-    redirect(`/app/leads/${id}?voice_error=outside_calling_hours`);
-  const [{ data: suppressed }, { data: previous }] = await Promise.all([
-    supabase
-      .from("phone_suppressions")
-      .select("id")
-      .eq("phone_hash", phoneHash(phone))
-      .in("channel", ["voice", "all"])
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from("voice_executions")
-      .select("id,status,provider_status,provider_execution_id")
-      .eq("prospect_id", id)
-      .limit(1)
-      .maybeSingle(),
-  ]);
-  if (suppressed) redirect(`/app/leads/${id}?voice_error=suppressed`);
-  if (previous && isRetryableLocalVoiceFailure(previous)) {
-    await supabase.from("voice_executions").delete().eq("id", previous.id);
-  } else if (previous) {
-    redirect(`/app/leads/${id}?voice_error=no_redial`);
-  }
-  await supabase
-    .from("prospects")
-    .update({ voice_consent_status: "confirmed" })
-    .eq("id", id);
-  const snapshot = {
-    lead_name: lead.input_name,
-    company: lead.input_company,
-    title: lead.input_title,
-    research_summary: lead.research_summary,
-    disclosure:
-      "This is an AI assistant calling on behalf of the seller. Ask whether now is a good time before continuing.",
-  };
-  const { data: execution, error } = await supabase
-    .from("voice_executions")
-    .insert({
-      user_id: user.id,
-      connection_id: connection.id,
-      prospect_id: id,
-      status: "queued",
-      provider_status: "local_queued",
-      recipient_phone: phone,
-      context_snapshot: snapshot,
-    })
-    .select("id")
-    .single();
-  if (error || !execution)
-    redirect(`/app/leads/${id}?voice_error=execution_create_failed`);
+
+  let result: VoiceCallStartResult;
   try {
-    const result = await createBolnaCall({
-      apiKey: decryptCredential(String(connection.encrypted_api_key)),
-      agentId: String(connection.agent_id),
-      recipientPhone: phone,
-      fromPhone: connection.from_phone_number
-        ? String(connection.from_phone_number)
-        : null,
-      userData: {
-        customer_name: String(lead.input_name ?? ""),
-        company: String(lead.input_company ?? ""),
-        title: String(lead.input_title ?? ""),
-        qualification_context: String(lead.research_summary ?? "").slice(
-          0,
-          500,
-        ),
-        ai_disclosure: String(snapshot.disclosure),
-        salesengai_execution_id: String(execution.id),
-      },
+    result = await startQualificationCall({
+      userId: user.id,
+      leadId: id,
+      consentConfirmed,
     });
-    await supabase
-      .from("voice_executions")
-      .update({
-        provider_execution_id: result.executionId,
-        provider_status: result.status,
-        raw_payload: result.raw,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", execution.id);
-    await supabase
-      .from("prospects")
-      .update({ lead_status: "contacted", next_action: "review" })
-      .eq("id", id);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Bolna call failed";
-    await supabase
-      .from("voice_executions")
-      .update({
-        status: "failed",
-        provider_status: "request_failed",
-        error_message: message,
-        completed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", execution.id);
-    redirect(`/app/leads/${id}?voice_error=${encodeURIComponent(message)}`);
+    const code =
+      error instanceof VoiceCallStartError
+        ? error.code
+        : encodeURIComponent(
+            error instanceof Error ? error.message : "Voice call failed",
+          );
+    redirect(`/app/leads/${id}?voice_error=${code}`);
   }
-  redirect(`/app/leads/${id}?call_started=1`);
+  redirect(
+    result.status === "already_called"
+      ? `/app/leads/${id}?voice_blocked=${encodeURIComponent(result.alreadyCalled?.executionId ?? result.executionId)}`
+      : `/app/leads/${id}?${
+      result.status === "scheduled" ? "call_scheduled" : "call_started"
+    }=1`,
+  );
 }
+
+async function triggerPublicEnrichment(formData: FormData) {
+  "use server";
+  const id = String(formData.get("id") ?? "");
+  const domain = String(formData.get("domain") ?? "").trim() || undefined;
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect("/login");
+
+  let errorMsg: string | null = null;
+  try {
+    await enqueueProspectEnrichment({
+      userId: user.id,
+      prospectId: id,
+      domain,
+      force: true,
+    });
+  } catch (err) {
+    errorMsg = err instanceof Error ? err.message : "Enrichment trigger failed";
+  }
+
+  if (errorMsg) {
+    redirect(`/app/leads/${id}?enrich_error=${encodeURIComponent(errorMsg)}`);
+  }
+  redirect(`/app/leads/${id}?enriched_queued=1`);
+}
+
 export default async function LeadPage({
   params,
   searchParams,
@@ -426,7 +351,9 @@ export default async function LeadPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{
     voice_error?: string;
+    voice_blocked?: string;
     call_started?: string;
+    call_scheduled?: string;
     crm_error?: string;
     crm_synced?: string;
     saved?: string;
@@ -434,6 +361,8 @@ export default async function LeadPage({
     draft_error?: string;
     sent?: string;
     send_error?: string;
+    enriched_queued?: string;
+    enrich_error?: string;
   }>;
 }) {
   const { id } = await params;
@@ -441,7 +370,7 @@ export default async function LeadPage({
   const { data: lead } = await supabase
     .from("prospects")
     .select(
-      "id,input_name,input_company,input_title,input_linkedin_url,email,phone,research_summary,email_subject,email_body,lead_status,next_action,next_action_at,context_version,qualification_bucket,handoff_summary,handoff_generated_at",
+      "id,input_name,input_company,input_title,input_linkedin_url,email,phone,company_domain,company_data,enrichment_status,last_enriched_at,enrichment_error_code,enrichment_source_urls,research_summary,email_subject,email_body,lead_status,next_action,next_action_at,context_version,qualification_bucket,handoff_summary,handoff_generated_at",
     )
     .eq("id", id)
     .maybeSingle();
@@ -463,6 +392,13 @@ export default async function LeadPage({
     )
     .eq("prospect_id", id)
     .order("created_at", { ascending: false });
+  const { data: voiceActions } = await supabase
+    .from("voice_action_requests")
+    .select(
+      "id,execution_id,action_kind,status,arguments,result,failure_reason,provider_status_code,provider_success,requested_at,completed_at",
+    )
+    .eq("prospect_id", id)
+    .order("requested_at", { ascending: false });
   const [{ data: crmConnections }, { data: crmSyncs }, { data: mailboxes }] =
     await Promise.all([
       supabase
@@ -619,31 +555,237 @@ export default async function LeadPage({
           </CardContent>
         </Card>
         <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>Public Contact Enrichment</CardTitle>
+            <div className="flex items-center gap-2">
+              <span
+                className={`px-2 py-0.5 text-xs font-semibold rounded-full ${
+                  lead.enrichment_status === "completed"
+                    ? "bg-emerald-500/10 text-emerald-600 border border-emerald-500/30"
+                    : lead.enrichment_status === "partial"
+                      ? "bg-amber-500/10 text-amber-600 border border-amber-500/30"
+                      : lead.enrichment_status === "running" ||
+                          lead.enrichment_status === "queued"
+                        ? "bg-blue-500/10 text-blue-600 border border-blue-500/30 animate-pulse"
+                        : lead.enrichment_status === "failed" ||
+                            lead.enrichment_status === "blocked"
+                          ? "bg-destructive/10 text-destructive border border-destructive/30"
+                          : "bg-muted text-muted-foreground"
+                }`}
+              >
+                {String(lead.enrichment_status ?? "not_started")}
+              </span>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm">
+            {query.enriched_queued && (
+              <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-600 font-medium">
+                ✓ Public contact enrichment queued! The crawler is analyzing the
+                company website.
+              </div>
+            )}
+            {query.enrich_error && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive font-medium">
+                ✕ Enrichment failed: {decodeURIComponent(query.enrich_error)}
+              </div>
+            )}
+            {lead.enrichment_error_code && (
+              <div className="text-xs text-destructive">
+                Error reason: {lead.enrichment_error_code}
+              </div>
+            )}
+            {lead.last_enriched_at && (
+              <p className="text-xs text-muted-foreground">
+                Last enriched:{" "}
+                {new Date(lead.last_enriched_at).toLocaleString()}
+              </p>
+            )}
+
+            {/* Extracted public contacts from company_data */}
+            {(() => {
+              const enrichmentData = (
+                lead.company_data as Record<string, unknown> | null
+              )?.public_contact_enrichment as
+                | Record<string, unknown>
+                | undefined;
+              const keyContacts = Array.isArray(enrichmentData?.key_contacts)
+                ? (enrichmentData.key_contacts as Array<{
+                    name: string;
+                    title: string;
+                  }>)
+                : [];
+              const emails = Array.isArray(enrichmentData?.emails)
+                ? (enrichmentData.emails as string[])
+                : [];
+              const phones = Array.isArray(enrichmentData?.phones)
+                ? (enrichmentData.phones as string[])
+                : [];
+              const socialLinks = Array.isArray(enrichmentData?.social_links)
+                ? (enrichmentData.social_links as string[])
+                : [];
+              const sources = Array.isArray(lead.enrichment_source_urls)
+                ? (lead.enrichment_source_urls as string[])
+                : [];
+
+              return (
+                <div className="space-y-3">
+                  {keyContacts.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Key Contacts:
+                      </span>
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {keyContacts.map((c, i) => (
+                          <div
+                            key={i}
+                            className="text-xs border rounded px-2 py-1 bg-muted/20"
+                          >
+                            <span className="font-medium">{c.name}</span> —{" "}
+                            <span className="text-muted-foreground">
+                              {c.title}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {emails.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Corporate Emails:
+                      </span>
+                      <div className="flex flex-wrap gap-1 text-xs">
+                        {emails.map((e, i) => (
+                          <span
+                            key={i}
+                            className="bg-muted px-2 py-0.5 rounded font-mono"
+                          >
+                            {e}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {phones.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Indian Business Numbers:
+                      </span>
+                      <div className="flex flex-wrap gap-1 text-xs">
+                        {phones.map((p, i) => (
+                          <span
+                            key={i}
+                            className="bg-muted px-2 py-0.5 rounded font-mono"
+                          >
+                            {p}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {socialLinks.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Company Social Profiles:
+                      </span>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        {socialLinks.map((s, i) => {
+                          try {
+                            const hostname = new URL(s).hostname;
+                            return (
+                              <a
+                                key={i}
+                                href={s}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:underline"
+                              >
+                                {hostname}
+                              </a>
+                            );
+                          } catch {
+                            return null;
+                          }
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {sources.length > 0 && (
+                    <div className="space-y-1 pt-1">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Sources ({sources.length} pages):
+                      </span>
+                      <ul className="list-disc pl-4 text-xs text-muted-foreground space-y-0.5">
+                        {sources.map((src, i) => (
+                          <li key={i}>
+                            <a
+                              href={src}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="hover:underline"
+                            >
+                              {src}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            <form
+              action={triggerPublicEnrichment}
+              className="flex gap-2 items-center pt-2"
+            >
+              <input type="hidden" name="id" value={id} />
+              {!lead.company_domain && (
+                <Input
+                  name="domain"
+                  placeholder="company domain (e.g. acme.in)"
+                  className="max-w-xs text-xs"
+                  required
+                />
+              )}
+              <Button type="submit" variant="outline" size="sm">
+                {lead.enrichment_status === "not_started"
+                  ? "Run Public Enrichment"
+                  : "Re-enrich Public Contacts"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+        <Card>
           <CardHeader>
             <CardTitle>Personalized Email Outreach</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 text-sm">
             {query.drafted && (
-              <p className="text-xs text-emerald-600 font-medium">
+              <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-600 font-medium">
                 ✓ AI email draft generated using your company context &amp;
                 playbook!
-              </p>
+              </div>
             )}
             {query.draft_error && (
-              <p className="text-xs text-destructive font-medium">
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive font-medium">
                 ✕ Drafting failed: {decodeURIComponent(query.draft_error)}
-              </p>
+              </div>
             )}
             {query.sent && (
-              <p className="text-xs text-emerald-600 font-medium">
+              <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-600 font-medium">
                 ✓ Email approved and sent via your connected Gmail! Status
                 updated to contacted.
-              </p>
+              </div>
             )}
             {query.send_error && (
-              <p className="text-xs text-destructive font-medium">
+              <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive font-medium">
                 ✕ Send failed: {decodeURIComponent(query.send_error)}
-              </p>
+              </div>
             )}
 
             <div className="space-y-1">
@@ -853,9 +995,19 @@ export default async function LeadPage({
                 Call queued with Bolna.
               </p>
             )}
+            {query.call_scheduled && (
+              <p className="text-sm text-emerald-600">
+                Qualification call scheduled through the durable workflow.
+              </p>
+            )}
             {query.voice_error && (
               <p className="text-sm text-destructive">
                 Call blocked: {String(query.voice_error).replaceAll("_", " ")}
+              </p>
+            )}
+            {query.voice_blocked && (
+              <p className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-800">
+                A qualification call has already been reserved for this person. A new call requires an explicit, reasoned Call Again approval.
               </p>
             )}
             <form action={startVoiceCall} className="space-y-3">
@@ -875,11 +1027,10 @@ export default async function LeadPage({
                 Start one qualification call
               </Button>
               <p className="text-xs text-muted-foreground">
-                One Bolna-accepted attempt per lead. Local API failures can be
-                retried. Calls are allowed only during the configured local
-                calling window.
+                One default attempt per normalized person, including duplicate lead rows. Local pre-provider failures remain auditable but do not consume the limit. Calls are allowed only during the configured local calling window.
               </p>
             </form>
+            {(hasAcceptedVoiceAttempt || query.voice_blocked) && <VoiceCallOverride leadId={id} />}
             {(calls ?? []).map((call) => (
               <div
                 key={String(call.id)}
@@ -889,8 +1040,12 @@ export default async function LeadPage({
                 {String(call.outcome ?? "outcome pending")} ·{" "}
                 {String(call.duration_seconds ?? 0)}s
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Provider execution: {String(call.provider_execution_id ?? "not assigned")} · Started {new Date(String(call.created_at)).toLocaleString()}
-                  {call.completed_at ? ` · Completed ${new Date(String(call.completed_at)).toLocaleString()}` : ""}
+                  Provider execution:{" "}
+                  {String(call.provider_execution_id ?? "not assigned")} ·
+                  Started {new Date(String(call.created_at)).toLocaleString()}
+                  {call.completed_at
+                    ? ` · Completed ${new Date(String(call.completed_at)).toLocaleString()}`
+                    : ""}
                 </p>
                 {call.error_message && (
                   <p className="text-destructive">
@@ -900,25 +1055,68 @@ export default async function LeadPage({
                 {call.transcript && (
                   <div className="mt-3">
                     <strong>Transcript</strong>
-                    <p className="whitespace-pre-wrap mt-1">{String(call.transcript)}</p>
+                    <p className="whitespace-pre-wrap mt-1">
+                      {String(call.transcript)}
+                    </p>
                   </div>
                 )}
                 {call.summary && (
                   <details className="mt-3">
-                    <summary className="cursor-pointer font-medium">Extracted call details</summary>
-                    <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-muted p-2 text-xs">{String(call.summary)}</pre>
+                    <summary className="cursor-pointer font-medium">
+                      Extracted call details
+                    </summary>
+                    <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-muted p-2 text-xs">
+                      {String(call.summary)}
+                    </pre>
                   </details>
                 )}
                 {call.recording_url && (
                   <p className="mt-2">
-                    <a className="underline" href={String(call.recording_url)} target="_blank" rel="noreferrer">Open call recording</a>
+                    <a
+                      className="underline"
+                      href={String(call.recording_url)}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open call recording
+                    </a>
                   </p>
                 )}
+                {(voiceActions ?? [])
+                  .filter(
+                    (action) => String(action.execution_id) === String(call.id),
+                  )
+                  .map((action) => (
+                    <div
+                      key={String(action.id)}
+                      className="mt-3 rounded-md border bg-muted/30 p-2 text-xs"
+                    >
+                      <strong>{String(action.action_kind)}</strong> ·{" "}
+                      {String(action.status)}
+                      {action.provider_success === true &&
+                        " · provider confirmed"}
+                      {action.provider_success === false &&
+                        " · provider rejected"}
+                      {action.failure_reason && (
+                        <p className="mt-1 text-destructive">
+                          {String(action.failure_reason)}
+                        </p>
+                      )}
+                      {action.result && (
+                        <pre className="mt-1 whitespace-pre-wrap break-words">
+                          {JSON.stringify(action.result, null, 2)}
+                        </pre>
+                      )}
+                    </div>
+                  ))}
                 <VoiceCallRefresh
                   executionId={String(call.id)}
                   status={String(call.status)}
-                  providerStatus={call.provider_status ? String(call.provider_status) : null}
-                  providerExecutionId={call.provider_execution_id ? String(call.provider_execution_id) : null}
+                  providerExecutionId={
+                    call.provider_execution_id
+                      ? String(call.provider_execution_id)
+                      : null
+                  }
                 />
               </div>
             ))}

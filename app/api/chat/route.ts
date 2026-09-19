@@ -32,7 +32,7 @@ export async function OPTIONS() {
 import { createAdminClient } from "@/lib/supabase/server";
 import { getUserFromRequest } from "@/lib/api-auth";
 import { getChatModel } from "@/lib/providers/anthropic";
-import { ORCHESTRATOR_PROMPT } from "@/lib/agent/orchestrator-prompt";
+import { ORCHESTRATOR_PROMPT, PHASE_SIX_SAFETY } from "@/lib/agent/orchestrator-prompt";
 import { makeOrchestratorTools } from "@/lib/agent/orchestrator-tools";
 import { maybeResetCredits, checkCredits } from "@/lib/credits";
 import { recordAiUsage, deductCreditsForAiOp } from "@/lib/ai-config";
@@ -180,17 +180,32 @@ export async function POST(req: Request) {
 
   const result = streamText({
     model: resolvedAi.model,
-    system: ORCHESTRATOR_PROMPT,
+    system: `${PHASE_SIX_SAFETY}\n${ORCHESTRATOR_PROMPT}`,
     messages: modelMessages,
     tools,
     stopWhen: stepCountIs(10),
-    onFinish: async ({ text, toolCalls, toolResults }) => {
+    onFinish: async (event) => {
       try {
+        const { text, steps } = event;
+        // In AI SDK v6, multi-step generation stores intermediate steps in event.steps.
+        // The top-level toolCalls and toolResults only contain the final step.
+        const allToolCalls = (steps ?? []).flatMap((s) => s.toolCalls ?? []);
+        const allToolResults = (steps ?? []).flatMap(
+          (s) => s.toolResults ?? [],
+        );
+
+        const effectiveToolCalls =
+          allToolCalls.length > 0 ? allToolCalls : (event.toolCalls ?? []);
+        const effectiveToolResults =
+          allToolResults.length > 0
+            ? allToolResults
+            : (event.toolResults ?? []);
+
         // Persist enough to replay the message on resume: the final text
         // PLUS each tool call's name+result so the UI can re-render its
         // ToolCallCard exactly as it appeared during streaming.
-        const persistedToolCalls = (toolCalls ?? []).map((tc) => {
-          const matchingResult = (toolResults ?? []).find(
+        const persistedToolCalls = effectiveToolCalls.map((tc) => {
+          const matchingResult = effectiveToolResults.find(
             (tr) => tr.toolCallId === tc.toolCallId,
           );
           return {

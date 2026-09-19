@@ -1,185 +1,76 @@
-/**
- * POST /api/prospects/[id]/enrich   — queue a public-contact enrichment
- * GET  /api/prospects/[id]/enrich   — poll the latest run
- *
- * Queues ALWAYS, even for a single lead. The existing single-lead path
- * (handleEnrichProspect) runs inside the streaming chat request, which
- * on Vercel means a hard function timeout and total loss of work if the
- * user closes the tab. A crawl is 25-40s of wall clock; it does not
- * belong in a request.
- *
- * Returns 202 + run_id. The client polls GET, or listens for the
- * `leadgen/enrichment.completed` event.
- *
- * Auth mirrors the repo convention: getUserFromRequest() accepts both
- * the browser cookie session and a Bearer token (Chrome extension).
- */
+import { NextResponse } from "next/server";
+import { z } from "zod";
 
-import { NextResponse } from "next/server"
-import { z } from "zod"
-
-import { requireUser } from "@/lib/auth/require-user"
-import { inngest } from "@/inngest/client"
-import { isCrawlerConfigured } from "@/lib/enrichment/crawler.service"
+import { getUserFromRequest } from "@/lib/api-auth";
 import {
-  buildIdempotencyKey,
-  createOrGetRun,
-  getLatestRunForProspect,
-  loadOwnedProspect,
-  normalizeCompanyDomain,
-} from "@/lib/enrichment/run-service"
-import { ENRICHMENT_REQUESTED } from "@/lib/enrichment/types"
+  enqueueProspectEnrichment,
+  EnqueueError,
+} from "@/lib/enrichment/enqueue";
 
-export const runtime = "nodejs"
+export const runtime = "nodejs";
+export const maxDuration = 15;
 
-const PostBody = z
+const Body = z
   .object({
-    /** Explicit domain. Wins over prospects.company_domain. */
-    domain: z.string().min(3).max(253).optional(),
-    /** Bypass the 30-day crawl cache for a user-triggered re-scan. */
-    force: z.boolean().optional(),
+    domain: z.string().trim().max(253).optional(),
+    force: z.boolean().optional().default(false),
   })
-  .strict()
+  .strict();
 
-// ---------------------------------------------------------------------
-// POST — enqueue
-// ---------------------------------------------------------------------
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const auth = await getUserFromRequest(request);
+  if (!auth.user) return new NextResponse("Unauthorized", { status: 401 });
 
-export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params
+  const { id } = await params;
   if (!z.string().uuid().safeParse(id).success) {
-    return NextResponse.json({ error: "invalid_prospect_id" }, { status: 400 })
+    return NextResponse.json({ error: "INVALID_PROSPECT_ID" }, { status: 400 });
   }
 
-  const auth = await requireUser(req)
-  if (!auth.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
-
-  let body: z.infer<typeof PostBody> = {}
-  if (req.headers.get("content-length") && req.headers.get("content-length") !== "0") {
-    let json: unknown
+  let body: unknown = {};
+  const raw = await request.text();
+  if (raw) {
     try {
-      json = await req.json()
+      body = JSON.parse(raw);
     } catch {
-      return NextResponse.json({ error: "invalid_json" }, { status: 400 })
+      return NextResponse.json({ error: "INVALID_JSON" }, { status: 400 });
     }
-    const parsed = PostBody.safeParse(json)
-    if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
-    }
-    body = parsed.data
   }
-
-  // Ownership: prospect -> job -> user. prospects has no user_id column.
-  const prospect = await loadOwnedProspect(id, auth.user.id)
-  if (!prospect) return NextResponse.json({ error: "not_found" }, { status: 404 })
-
-  // An authoritative domain is REQUIRED. guessDomainFromCompany() is
-  // fine for an email pattern guess, but crawling a guessed domain
-  // writes another company's contact details onto this lead.
-  const domain = normalizeCompanyDomain(body.domain ?? prospect.company_domain)
-  if (!domain) {
+  const parsed = Body.safeParse(body);
+  if (!parsed.success) {
     return NextResponse.json(
-      {
-        error: "domain_required",
-        message:
-          "This prospect has no verified company domain. Pass { domain } explicitly — " +
-          "a domain guessed from the company name is not safe to crawl.",
+      { error: "INVALID_REQUEST", details: parsed.error.flatten() },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const result = await enqueueProspectEnrichment({
+      userId: auth.user.id,
+      prospectId: id,
+      domain: parsed.data.domain,
+      idempotencyHint: request.headers.get("idempotency-key"),
+      force: parsed.data.force,
+    });
+    return NextResponse.json(result, {
+      status:
+        result.status === "completed" || result.status === "partial"
+          ? 200
+          : 202,
+      headers: {
+        "Cache-Control": "no-store",
+        Location: `/api/prospects/${id}/enrichment-runs/${result.run_id}`,
       },
-      { status: 422 },
-    )
-  }
-
-  // `force` gets its own idempotency bucket so a deliberate re-scan is
-  // not swallowed by the day's existing run.
-  const bucket = body.force ? `force:${Date.now()}` : undefined
-  const idempotencyKey = buildIdempotencyKey(id, domain, bucket)
-
-  const { run, created } = await createOrGetRun({
-    userId: auth.user.id,
-    prospectId: id,
-    domain,
-    idempotencyKey,
-  })
-
-  // Only dispatch for a genuinely new run. A duplicate POST returns the
-  // in-flight run without queuing a second crawl.
-  //
-  // Dispatch is BEST-EFFORT and deliberately does not fail the request.
-  // The enrichment_runs row is the durable record — it is already
-  // committed by this point. If Inngest is unreachable (dev without the
-  // CLI, a transient outage, a bad event key) the run simply stays
-  // 'queued' and the reconciliation cron re-dispatches it within five
-  // minutes. Throwing here would return 500 for work that IS safely
-  // recorded, and invite a client retry that the idempotency key would
-  // collapse anyway. This is the outbox pattern: persist, then publish.
-  let dispatched = true
-  if (created) {
-    try {
-      await inngest.send({
-        name: ENRICHMENT_REQUESTED,
-        data: {
-          run_id: run.id,
-          user_id: auth.user.id,
-          prospect_id: id,
-          domain,
-        },
-      })
-    } catch (err) {
-      dispatched = false
-      console.error(
-        `[enrich] queued run ${run.id} but could not publish the event; ` +
-          `reconciliation will retry it: ${(err as Error).message}`,
-      )
+    });
+  } catch (error) {
+    if (error instanceof EnqueueError) {
+      return NextResponse.json({ error: error.code }, { status: error.status });
     }
+    return NextResponse.json(
+      { error: "ENRICHMENT_ENQUEUE_FAILED" },
+      { status: 500 },
+    );
   }
-
-  return NextResponse.json(
-    {
-      run_id: run.id,
-      prospect_id: id,
-      domain,
-      status: run.status,
-      queued: created,
-      // false => the run is recorded but the event did not publish;
-      // the reconciliation cron picks it up. Not an error for the caller.
-      dispatched,
-      using_mock_data: !isCrawlerConfigured(),
-      poll_url: `/api/prospects/${id}/enrich`,
-    },
-    { status: created ? 202 : 200 },
-  )
-}
-
-// ---------------------------------------------------------------------
-// GET — poll
-// ---------------------------------------------------------------------
-
-export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params
-  if (!z.string().uuid().safeParse(id).success) {
-    return NextResponse.json({ error: "invalid_prospect_id" }, { status: 400 })
-  }
-
-  const auth = await requireUser(req)
-  if (!auth.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
-
-  const prospect = await loadOwnedProspect(id, auth.user.id)
-  if (!prospect) return NextResponse.json({ error: "not_found" }, { status: 404 })
-
-  const run = await getLatestRunForProspect(id, auth.user.id)
-  if (!run) {
-    return NextResponse.json({ prospect_id: id, status: "none", run: null })
-  }
-
-  return NextResponse.json({
-    prospect_id: id,
-    status: run.status,
-    run: {
-      id: run.id,
-      domain: run.domain,
-      status: run.status,
-      attempt: run.attempt,
-      created_at: run.created_at,
-    },
-  })
 }

@@ -124,6 +124,24 @@ export async function POST(req: Request) {
       continue // Not time yet
     }
 
+    // Re-check immediately before scheduling. Reply polling may have stopped
+    // this enrollment after the initial batch was read.
+    const {data:stillActive}=await supabase
+      .from('sequence_enrollments')
+      .select('id')
+      .eq('id',enrollment.id as string)
+      .eq('status','active')
+      .maybeSingle()
+    if(!stillActive)continue
+    const {data:terminalReply}=await supabase
+      .from('campaign_recipients')
+      .select('id')
+      .eq('prospect_id',prospect.id as string)
+      .in('status',['replied','unsubscribed','bounced'])
+      .limit(1)
+      .maybeSingle()
+    if(terminalReply)continue
+
     // 4. Generate the email and schedule it
     const subject = hydrateTemplate(nextStep.subject_template as string || "", prospect)
     const body = hydrateTemplate(nextStep.body_template as string, prospect)

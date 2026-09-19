@@ -1,10 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { InboxClient, type InboxItem } from "@/app/app/inbox/inbox-client";
-
-
-// Kept from the pre-port version: every page under /app reads the
-// session cookie and cannot be statically prerendered.
-export const dynamic = "force-dynamic"
+import { HandoffCards, type HandoffCardItem } from "@/app/app/inbox/handoff-cards";
 
 /**
  * /app/inbox — human-review queue and detailed inbox for campaign replies.
@@ -25,6 +21,12 @@ export default async function InboxPage() {
     .limit(100);
 
   const classificationRows = rows ?? [];
+  const { data: handoffRows } = await supabase
+    .from("lead_handoffs")
+    .select("id,prospect_id,source_type,reason,priority,summary,recommended_next_action,due_at,created_at,status")
+    .in("status", ["open", "acknowledged"])
+    .order("created_at", { ascending: false })
+    .limit(100);
 
   const recipientIds = Array.from(
     new Set(
@@ -62,9 +64,10 @@ export default async function InboxPage() {
 
   const prospectIds = Array.from(
     new Set(
-      Array.from(recipientMap.values())
+      [...Array.from(recipientMap.values())
         .map((r) => r.prospect_id)
         .filter((id): id is string => Boolean(id)),
+      ...(handoffRows ?? []).map((row) => String(row.prospect_id))],
     ),
   );
 
@@ -169,6 +172,10 @@ export default async function InboxPage() {
       campaignName,
     };
   });
+  const handoffs: HandoffCardItem[] = (handoffRows ?? []).map((row) => {
+    const lead = prospectMap.get(String(row.prospect_id));
+    return { id: String(row.id), prospectId: String(row.prospect_id), leadName: lead?.input_name ?? "Unknown lead", company: lead?.input_company ?? null, sourceType: String(row.source_type), reason: String(row.reason), priority: String(row.priority), summary: String(row.summary), recommendedNextAction: String(row.recommended_next_action), dueAt: row.due_at as string | null, createdAt: String(row.created_at), status: String(row.status) };
+  });
 
   return (
     <div className="flex-1 flex flex-col h-full bg-background/50 relative overflow-hidden">
@@ -188,6 +195,7 @@ export default async function InboxPage() {
       </header>
 
       <section className="flex-1 overflow-y-auto px-6 py-6">
+        <HandoffCards items={handoffs} />
         <InboxClient initialItems={items} />
       </section>
     </div>

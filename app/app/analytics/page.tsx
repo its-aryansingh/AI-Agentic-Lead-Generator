@@ -1,11 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { AnalyticsClient, type AnalyticsData } from "@/app/app/analytics/analytics-client";
 
-
-// Kept from the pre-port version: every page under /app reads the
-// session cookie and cannot be statically prerendered.
-export const dynamic = "force-dynamic"
-
 function getMonthAgoIso(): string {
   return new Date(Date.now() - 30 * 86_400_000).toISOString();
 }

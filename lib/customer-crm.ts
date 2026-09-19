@@ -11,6 +11,7 @@ import {
   zohoApiHost,
   type ZohoEnv,
 } from "@/lib/providers/zoho-core";
+import { buildProspectIdentity } from "@/lib/prospect-identity";
 
 const timeout = 12_000;
 async function jsonFetch(url: string, init: RequestInit) {
@@ -20,6 +21,20 @@ async function jsonFetch(url: string, init: RequestInit) {
   });
   const json = await response.json().catch(() => ({}));
   return { ok: response.ok, status: response.status, json };
+}
+export class CustomerCrmProviderError extends Error {
+  public readonly provider: "hubspot" | "zoho";
+  public readonly status: number;
+  constructor(
+    provider: "hubspot" | "zoho",
+    status: number,
+    message: string,
+  ) {
+    super(`${provider === "hubspot" ? "HubSpot" : "Zoho"} CRM error (${status}): ${message}`);
+    this.name = "CustomerCrmProviderError";
+    this.provider = provider;
+    this.status = status;
+  }
 }
 function objectId(value: unknown) {
   if (!value || typeof value !== "object") return null;
@@ -47,6 +62,103 @@ export type CustomerCrmCredentials =
       clientSecret: string;
       region: string;
     };
+
+export type PullCustomerCrmOptions = {
+  limit?: number;
+  modifiedAfter?: Date | string;
+  cursor?: string;
+};
+
+export type NormalizedCrmContact = {
+  providerContactId: string;
+  firstName: string | null;
+  lastName: string | null;
+  company: string | null;
+  jobTitle: string | null;
+  email: string | null;
+  phone: string | null;
+  normalizedEmail: string | null;
+  normalizedPhoneE164: string | null;
+  emailHash: string | null;
+  phoneHash: string | null;
+  modifiedAt: string | null;
+  rawMetadata: Record<string, unknown>;
+};
+
+const CRM_PULL_PROPERTIES = [
+  "firstname", "lastname", "company", "jobtitle", "email", "phone", "hs_lastmodifieddate",
+] as const;
+const ZOHO_PULL_FIELDS = "id,First_Name,Last_Name,Account_Name,Title,Email,Phone,Modified_Time";
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+function isoDate(value: Date | string | undefined) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) throw new Error("modifiedAfter must be a valid date.");
+  return date.toISOString();
+}
+function normalizedContact(input: {
+  id: unknown; firstName?: unknown; lastName?: unknown; company?: unknown; jobTitle?: unknown;
+  email?: unknown; phone?: unknown; modifiedAt?: unknown; rawMetadata: Record<string, unknown>;
+}): NormalizedCrmContact {
+  const providerContactId = text(input.id);
+  if (!providerContactId) throw new Error("CRM contact is missing its provider ID.");
+  const email = text(input.email);
+  const phone = text(input.phone);
+  const identity = buildProspectIdentity({ email, phone });
+  return {
+    providerContactId, firstName: text(input.firstName), lastName: text(input.lastName),
+    company: text(input.company), jobTitle: text(input.jobTitle), email: identity.normalized_email,
+    phone, normalizedEmail: identity.normalized_email,
+    normalizedPhoneE164: identity.normalized_phone_e164, emailHash: identity.email_hash,
+    phoneHash: identity.phone_hash, modifiedAt: text(input.modifiedAt), rawMetadata: input.rawMetadata,
+  };
+}
+
+/** Pulls one provider page. Credentials remain server-only; callers must never serialize them. */
+export async function pullCustomerCrm(
+  credentials: CustomerCrmCredentials,
+  options: PullCustomerCrmOptions = {},
+): Promise<{ contacts: NormalizedCrmContact[]; nextCursor: string | null; hasMore: boolean }> {
+  const limit = Math.max(1, Math.min(100, Math.floor(options.limit ?? 100)));
+  const modifiedAfter = isoDate(options.modifiedAfter);
+  if (credentials.provider === "hubspot") {
+    const body: Record<string, unknown> = {
+      limit, after: options.cursor, properties: CRM_PULL_PROPERTIES,
+      sorts: ["hs_lastmodifieddate"],
+    };
+    if (modifiedAfter) body.filterGroups = [{ filters: [{ propertyName: "hs_lastmodifieddate", operator: "GTE", value: String(new Date(modifiedAfter).getTime()) }] }];
+    const result = await jsonFetch("https://api.hubapi.com/crm/v3/objects/contacts/search", {
+      method: "POST", headers: { Authorization: `Bearer ${credentials.accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    if (!result.ok) throw new CustomerCrmProviderError("hubspot", result.status, message(result.json) || "contact pull failed");
+    const json = result.json as { results?: Array<{ id?: unknown; properties?: Record<string, unknown>; archived?: unknown }>; paging?: { next?: { after?: unknown } } };
+    const nextCursor = text(json.paging?.next?.after);
+    return {
+      contacts: (json.results ?? []).filter((row) => !row.archived).map((row) => {
+        const p = row.properties ?? {};
+        return normalizedContact({ id: row.id, firstName: p.firstname, lastName: p.lastname, company: p.company, jobTitle: p.jobtitle, email: p.email, phone: p.phone, modifiedAt: p.hs_lastmodifieddate, rawMetadata: p });
+      }), nextCursor, hasMore: Boolean(nextCursor),
+    };
+  }
+  const { token, region } = await zohoAccessToken(credentials);
+  const url = new URL(`${zohoApiHost(region)}/crm/v6/Contacts`);
+  url.searchParams.set("fields", ZOHO_PULL_FIELDS);
+  url.searchParams.set("per_page", String(limit));
+  if (options.cursor) url.searchParams.set("page_token", options.cursor);
+  // Zoho's list endpoint has no portable Modified_Time filter.  COQL would
+  // exclude pagination tokens, so we use its supported `If-Modified-Since` header.
+  const result = await jsonFetch(url.toString(), { headers: { Authorization: `Zoho-oauthtoken ${token}`, ...(modifiedAfter ? { "If-Modified-Since": modifiedAfter } : {}) } });
+  if (!result.ok) throw new CustomerCrmProviderError("zoho", result.status, message(result.json) || "contact pull failed");
+  const json = result.json as { data?: Array<Record<string, unknown>>; info?: { next_page_token?: unknown; more_records?: unknown } };
+  const nextCursor = text(json.info?.next_page_token);
+  return {
+    contacts: (json.data ?? []).map((row) => normalizedContact({ id: row.id, firstName: row.First_Name, lastName: row.Last_Name, company: row.Account_Name, jobTitle: row.Title, email: row.Email, phone: row.Phone, modifiedAt: row.Modified_Time, rawMetadata: row })),
+    nextCursor, hasMore: Boolean(nextCursor || json.info?.more_records),
+  };
+}
 
 export async function verifyCustomerCrm(credentials: CustomerCrmCredentials) {
   if (credentials.provider === "hubspot") {

@@ -26,11 +26,6 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 
-
-// Kept from the pre-port version: every page under /app reads the
-// session cookie and cannot be statically prerendered.
-export const dynamic = "force-dynamic"
-
 async function savePreferences(formData: FormData) {
   "use server";
   const chatModel = String(formData.get("chat_model") ?? ""),

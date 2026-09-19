@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -419,20 +419,11 @@ export function InboxClient({ initialItems }: { initialItems: InboxItem[] }) {
                       {/* 7. Action Buttons */}
                       <td className="py-3 px-4 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-2">
-                          {/* This repo's Button does not implement asChild
-                              (it has no Slot), so the canonical shadcn
-                              fallback is to style the Link directly with
-                              buttonVariants. SalesEngAIMVP shipped the
-                              asChild form against the same Button; it does
-                              not typecheck. */}
                           {item.prospectId && (
                             <Link
                               href={`/app/leads/${item.prospectId}`}
+                              className="inline-flex h-6 items-center gap-1 rounded-md bg-primary px-2 text-xs font-medium text-primary-foreground shadow-sm hover:bg-primary/80"
                               onClick={(e) => e.stopPropagation()}
-                              className={cn(
-                                buttonVariants({ size: "xs", variant: "default" }),
-                                "gap-1 shadow-sm font-medium",
-                              )}
                             >
                               Open Lead
                               <ArrowUpRight className="w-3.5 h-3.5" />
@@ -557,7 +548,7 @@ export function InboxClient({ initialItems }: { initialItems: InboxItem[] }) {
                 {selectedItem.prospectId && (
                   <Link
                     href={`/app/leads/${selectedItem.prospectId}`}
-                    className={cn(buttonVariants({ size: "sm" }), "gap-1.5")}
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md bg-primary px-2.5 text-[0.8rem] font-medium text-primary-foreground hover:bg-primary/80"
                   >
                     Go to Lead Workspace
                     <ExternalLink className="w-4 h-4" />

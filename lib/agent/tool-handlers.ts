@@ -7,15 +7,17 @@
  */
 
 import { createAdminClient } from "@/lib/supabase/server";
-import {
-  discoverProspects,
-  type ProspectCandidate,
-} from "@/lib/providers/brave-search";
+import crypto from "node:crypto";
+import { type ProspectCandidate } from "@/lib/providers/brave-search";
 import {
   draftForProspect,
   draftReplyResponse,
 } from "@/lib/providers/anthropic";
 import { resolveAiModel } from "@/lib/ai-config";
+import {
+  createLeadHandoff,
+  deliverLeadHandoffNotifications,
+} from "@/lib/unified-lead-handoff";
 import { exportToSheet, rowsToCsv } from "@/lib/providers/google-sheets";
 import { searchGithubUsers } from "@/lib/providers/github";
 import { searchHnUsers } from "@/lib/providers/hn-algolia";
@@ -28,6 +30,12 @@ import {
 } from "@/lib/email-patterns";
 import { scrapeCompany, scrapeNews } from "@/lib/providers/scraper-client";
 import { searchTavily } from "@/lib/providers/search-aggregator";
+import { runConvertibleDiscovery } from "@/lib/discovery/discovery-orchestrator";
+import {
+  isApolloConfigured,
+  bulkMatchPeople,
+} from "@/lib/discovery/apollo-client";
+import type { ScoredProspectCandidate } from "@/lib/discovery/types";
 import {
   sendWhatsApp,
   sendWhatsAppTemplate,
@@ -38,7 +46,13 @@ import { pushZohoContact, addZohoNote } from "@/lib/providers/zoho";
 import { sendGmail } from "@/lib/providers/gmail";
 import { decryptCredential } from "@/lib/credential-crypto";
 import { checkCredits, deductCredits } from "@/lib/credits";
+import { buildProspectIdentity } from "@/lib/prospect-identity";
 import { enrichmentBundleCredits } from "@/lib/credit-costs";
+import {
+  enqueueProspectEnrichment,
+  captureEnrichmentDispatchCounts,
+} from "@/lib/enrichment/enqueue";
+import { enrichMultipleDomainsDirect } from "@/lib/enrichment/direct-enrichment";
 import {
   appendComplianceFooter,
   makeUnsubToken,
@@ -50,6 +64,47 @@ import {
   contextSnapshot,
   type ApprovedExample,
 } from "@/lib/playbook";
+import {
+  hasExplicitVoiceCallAuthorization,
+  uiMessageText,
+} from "@/lib/voice/chat-call-authorization";
+import {
+  startQualificationCall,
+  VoiceCallStartError,
+} from "@/lib/voice/start-qualification-call";
+import { withinCallingHours } from "@/lib/voice-compliance";
+import { getVoiceAnalytics } from "@/lib/voice/voice-analytics";
+import {
+  applyCrmPull,
+  previewCrmPull,
+  type CrmProvider,
+  type CrmPullDatabase,
+} from "@/lib/crm-pull";
+import {
+  dispatchAutonomousOutreach,
+  type OutreachChannel,
+} from "@/lib/outreach/autonomous-dispatcher";
+import {
+  provisionBolnaQualificationAgent,
+  updateBolnaQualificationAgent,
+} from "@/lib/voice/providers/bolna";
+import { voiceWebhookSignature } from "@/lib/voice-compliance";
+import type {
+  CallDetailsInput,
+  CrmSyncInput,
+  FollowupInput,
+  QualificationBatchInput,
+  TriggerOutreachInput,
+  VoiceAgentInput,
+} from "@/lib/agent/sales-tool-schemas";
+import {
+  filterLeadsByAvailability,
+  filterLeadsByCallStatus,
+  filterLeadsByPhone,
+  filterLeadsByQuery,
+  filterLeadsByTimeRange,
+  type LeadForFiltering,
+} from "@/lib/agent/lead-search-core";
 
 import type { ToolContext } from "@/lib/agent/tools";
 
@@ -113,22 +168,50 @@ export async function handleWebSearch(
   },
   ctx: ToolContext,
 ) {
-  const cacheKey = `brave:${params.query}:${params.max_results}`;
-  const candidates = await getOrSetCache(cacheKey, 7 * 86_400, () =>
-    discoverProspects(params),
+  const fullInstruction = [
+    params.query,
+    params.target_role ? `role: ${params.target_role}` : "",
+    params.industry ? `industry: ${params.industry}` : "",
+    params.location ? `location: ${params.location}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const cacheKey = `convertible_discovery:${ctx.userId}:${params.query}:${params.target_role ?? ""}:${params.industry ?? ""}:${params.location ?? ""}:${params.max_results}`;
+  const discoveryResult = await getOrSetCache(cacheKey, 7 * 86_400, () =>
+    runConvertibleDiscovery(fullInstruction, ctx.userId, params.max_results),
   );
 
-  // Persist candidates so a later start_bulk_job can reference them by ID.
+  const candidates = discoveryResult.candidates.slice(0, params.max_results);
+
+  // Persist candidates so a later start_bulk_job or save_candidates_to_leads can reference them by ID.
   const supabase = createAdminClient();
-  const inserted: Array<{ id: string; candidate: ProspectCandidate }> = [];
+  const inserted: Array<{ id: string; candidate: ScoredProspectCandidate }> =
+    [];
   let persistenceError: string | null = null;
 
   if (candidates.length > 0) {
     const rows = candidates.map((c) => ({
       session_id: ctx.sessionId,
-      source: c.source,
-      source_ref: c.source_url,
-      preview: c as unknown as Record<string, unknown>,
+      source: c.source === "apollo" ? "serper" : c.source,
+      source_ref: c.sourceUrl || c.linkedinUrl || null,
+      preview: {
+        name: c.name,
+        title: c.title,
+        company: c.company,
+        location: c.location,
+        source: c.source,
+        source_url: c.sourceUrl || c.linkedinUrl || "",
+        snippet: c.snippet || "",
+        apolloId: c.apolloId,
+        domain: c.domain,
+        linkedinUrl: c.linkedinUrl,
+        convertibilityScore: c.convertibilityScore,
+        intentBucket: c.intentBucket,
+        primaryTrigger: c.primaryTrigger,
+        suggestedHook: c.suggestedHook,
+        signals: c.signals,
+      },
     }));
     const { data, error } = await supabase
       .from("prospect_candidates")
@@ -139,7 +222,7 @@ export async function handleWebSearch(
       for (const row of data) {
         inserted.push({
           id: row.id as string,
-          candidate: row.preview as unknown as ProspectCandidate,
+          candidate: row.preview as unknown as ScoredProspectCandidate,
         });
       }
     }
@@ -151,7 +234,8 @@ export async function handleWebSearch(
       inserted.length > 0
         ? inserted.map((r) => ({ id: r.id, ...r.candidate }))
         : candidates.map((c) => ({ id: null, ...c })),
-    using_mock_data: candidates[0]?.source === "mock",
+    sourceUsed: discoveryResult.sourceUsed,
+    using_mock_data: discoveryResult.sourceUsed === "mock",
     persistence_error: persistenceError,
   };
 }
@@ -266,18 +350,18 @@ export async function handleEnrichProspect(
     domain
       ? scraperEnabled || !tavilyEnabled
         ? getOrSetCache(`company:${domain}`, 30 * 86400, () =>
-          scrapeCompany({ domain: domain!, target_name: params.name }),
-        )
+            scrapeCompany({ domain: domain!, target_name: params.name }),
+          )
         : Promise.resolve(null)
       : Promise.resolve(null),
     params.company
       ? scraperEnabled || !tavilyEnabled
         ? getOrSetCache(`news:${domain ?? params.company}`, 7 * 86400, () =>
-          scrapeNews({
-            company_name: params.company!,
-            domain: domain ?? undefined,
-          }),
-        )
+            scrapeNews({
+              company_name: params.company!,
+              domain: domain ?? undefined,
+            }),
+          )
         : Promise.resolve(null)
       : Promise.resolve(null),
     tavilyEnabled
@@ -442,20 +526,126 @@ export async function handleAddNamedProspects(
 
 export async function handleSaveCandidatesToLeads(
   params: {
-    prospects: Array<{
+    prospects?: Array<{
       name: string;
       company?: string;
       title?: string;
       linkedin_url?: string;
+      company_domain?: string;
     }>;
+    save_all_staged?: boolean;
   },
   ctx: ToolContext,
 ) {
   const supabase = createAdminClient();
-  const prospects = params.prospects.slice(0, 50);
-  if (prospects.length === 0) {
-    return { error: "No prospects were provided.", count: 0, leads: [] };
+
+  // Look up recent prospect_candidates in this session to match apolloId / signals / enriched data
+  const { data: sessionCandidates } = await supabase
+    .from("prospect_candidates")
+    .select("preview, created_at")
+    .eq("session_id", ctx.sessionId)
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  // Candidate preview payloads are persisted JSON with provider-specific shape.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const candidateMap = new Map<string, any>();
+  if (sessionCandidates) {
+    for (const row of sessionCandidates) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const p = row.preview as any;
+      if (p?.name) {
+        candidateMap.set(p.name.trim().toLowerCase(), p);
+      }
+      if (p?.company) {
+        candidateMap.set(p.company.trim().toLowerCase(), p);
+      }
+    }
   }
+
+  let prospectsToSave: Array<{
+    name: string;
+    company?: string;
+    title?: string;
+    linkedin_url?: string;
+    company_domain?: string;
+    phone?: string | null;
+    email?: string | null;
+    is_enriched?: boolean;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    match?: any;
+  }> = [];
+
+  if (
+    params.save_all_staged ||
+    !params.prospects ||
+    params.prospects.length === 0
+  ) {
+    if (sessionCandidates && sessionCandidates.length > 0) {
+      const seen = new Set<string>();
+      for (const row of sessionCandidates) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const p = row.preview as any;
+        const key = (p?.company || p?.name || "").trim().toLowerCase();
+        if (key && !seen.has(key)) {
+          seen.add(key);
+          prospectsToSave.push({
+            name: p.name || "Leadership Team",
+            company: p.company,
+            title: p.title,
+            linkedin_url: p.linkedinUrl || p.source_url,
+            company_domain: p.domain,
+            phone: p.phone || null,
+            email: p.email || null,
+            is_enriched: Boolean(p.is_enriched || p.phone || p.email),
+            match: p,
+          });
+        }
+      }
+    }
+  } else {
+    prospectsToSave = params.prospects.slice(0, 50).map((p) => {
+      const match =
+        candidateMap.get(p.name.trim().toLowerCase()) ||
+        (p.company
+          ? candidateMap.get(p.company.trim().toLowerCase())
+          : undefined);
+      return {
+        name: p.name.trim(),
+        company: p.company?.trim(),
+        title: p.title?.trim(),
+        linkedin_url: p.linkedin_url?.trim(),
+        company_domain: p.company_domain?.trim() || match?.domain,
+        phone: match?.phone || null,
+        email: match?.email || null,
+        is_enriched: Boolean(
+          match?.is_enriched || match?.phone || match?.email,
+        ),
+        match,
+      };
+    });
+  }
+
+  if (prospectsToSave.length === 0) {
+    return {
+      error:
+        "No prospect candidates found in this session or provided to save.",
+      count: 0,
+      leads: [],
+    };
+  }
+
+  const apolloIdsToMatch: string[] = [];
+  for (const p of prospectsToSave) {
+    if (p.match?.apolloId) {
+      apolloIdsToMatch.push(p.match.apolloId);
+    }
+  }
+
+  const contactMap =
+    apolloIdsToMatch.length > 0 && isApolloConfigured()
+      ? await bulkMatchPeople(apolloIdsToMatch, { revealPhone: true })
+      : new Map();
 
   const { data: job, error: jobError } = await supabase
     .from("jobs")
@@ -464,7 +654,7 @@ export async function handleSaveCandidatesToLeads(
       source_session_id: ctx.sessionId,
       input_source: "chat_search",
       status: "completed",
-      prospect_count: prospects.length,
+      prospect_count: prospectsToSave.length,
       completed_at: new Date().toISOString(),
     })
     .select("id")
@@ -477,24 +667,69 @@ export async function handleSaveCandidatesToLeads(
     };
   }
 
+  const rowsToInsert = prospectsToSave.map((prospect) => {
+    const match = prospect.match;
+    const apolloId = match?.apolloId;
+    const contact = apolloId ? contactMap.get(apolloId) : undefined;
+    const talkingPoints = [
+      match?.primaryTrigger,
+      match?.suggestedHook,
+      match?.signals?.signalSummary,
+    ].filter(Boolean);
+
+    const domain =
+      prospect.company_domain?.trim() ||
+      match?.domain ||
+      (prospect.company ? guessDomainFromCompany(prospect.company) : null);
+
+    const email = prospect.email || contact?.email || null;
+    const phone = prospect.phone || contact?.phone || null;
+    const hasVerifiedContact = Boolean(prospect.is_enriched || email || phone);
+
+    return {
+      user_id: ctx.userId,
+      job_id: job.id,
+      input_source: "chat_search",
+      input_name: prospect.name.trim(),
+      input_company: prospect.company?.trim() || match?.company || null,
+      input_title: prospect.title?.trim() || match?.title || null,
+      input_linkedin_url:
+        prospect.linkedin_url?.trim() ||
+        contact?.linkedinUrl ||
+        match?.linkedinUrl ||
+        null,
+      company_domain: domain,
+      email,
+      email_confidence:
+        contact?.emailStatus === "verified"
+          ? "valid"
+          : email
+            ? "valid"
+            : "unknown",
+      email_source: email ? "extracted" : "none",
+      phone,
+      ...buildProspectIdentity({
+        email: email || undefined,
+        phone: phone || undefined,
+      }),
+      status: "pending",
+      lead_status: "new",
+      enrichment_status: hasVerifiedContact ? "completed" : "not_started",
+      qualification_bucket: match?.intentBucket === "high" ? "hot" : "warm",
+      next_action: phone ? "call" : "review",
+      research_summary:
+        match?.snippet ||
+        (match?.title ? `${match.title} at ${match.company}.` : null),
+      talking_points: talkingPoints.length > 0 ? talkingPoints : null,
+    };
+  });
+
   const { data: leads, error: leadsError } = await supabase
     .from("prospects")
-    .insert(
-      prospects.map((prospect) => ({
-        job_id: job.id,
-        input_source: "chat_search",
-        input_name: prospect.name.trim(),
-        input_company: prospect.company?.trim() || null,
-        input_title: prospect.title?.trim() || null,
-        input_linkedin_url: prospect.linkedin_url?.trim() || null,
-        status: "pending",
-        lead_status: "new",
-        next_action: "review",
-        email_source: "none",
-        email_confidence: "unknown",
-      })),
-    )
-    .select("id,input_name,input_company,input_title");
+    .insert(rowsToInsert)
+    .select(
+      "id,input_name,input_company,input_title,email,phone,company_domain,enrichment_status",
+    );
   if (leadsError) {
     await supabase
       .from("jobs")
@@ -503,16 +738,365 @@ export async function handleSaveCandidatesToLeads(
     return { error: leadsError.message, count: 0, leads: [] };
   }
 
+  let enqueuedCount = 0;
+  if (process.env.PUBLIC_CONTACT_ENRICHMENT_ENABLED === "true") {
+    // Only enqueue background enrichment for leads that haven't been enriched yet
+    const unenrichedLeads = (leads ?? []).filter(
+      (row) =>
+        row.enrichment_status !== "completed" &&
+        typeof row.company_domain === "string" &&
+        row.company_domain,
+    );
+    if (unenrichedLeads.length > 0) {
+      const dispatches = unenrichedLeads.map((row) =>
+        enqueueProspectEnrichment({
+          userId: ctx.userId,
+          prospectId: row.id as string,
+          domain: row.company_domain as string,
+        }),
+      );
+      const outcomes = await Promise.allSettled(dispatches);
+      const counts = captureEnrichmentDispatchCounts(outcomes);
+      enqueuedCount = counts.enqueued;
+    }
+  }
+
   return {
     job_id: job.id,
     count: leads?.length ?? 0,
+    enqueued_enrichment_count: enqueuedCount,
     leads: (leads ?? []).map((lead) => ({
       lead_id: lead.id,
       name: lead.input_name,
       company: lead.input_company,
       title: lead.input_title,
+      email: lead.email,
+      phone: lead.phone,
+      company_domain: lead.company_domain,
     })),
-    message: `Added ${leads?.length ?? 0} lead(s) to the Leads section.`,
+    message:
+      enqueuedCount > 0
+        ? `Added ${leads?.length ?? 0} lead(s) to the Leads section and queued public contact crawler enrichment for un-enriched leads.`
+        : `Added ${leads?.length ?? 0} lead(s) to the Leads section with verified contact details.`,
+  };
+}
+
+export async function handleEnrichProspectsPublic(
+  params: {
+    enrich_staged?: boolean;
+    lead_ids?: string[];
+    lead_id?: string;
+    domain?: string;
+    query?: string;
+    all_unenriched?: boolean;
+    limit?: number;
+  },
+  ctx: ToolContext,
+) {
+  const supabase = createAdminClient();
+  const limit = Math.min(params.limit ?? 20, 50);
+
+  // 1. Gather candidate lead rows
+  // 1. If enrich_staged is requested, or if no specific leads were requested and staged candidates exist:
+  const isTargetingDbLeads = Boolean(
+    (params.lead_ids && params.lead_ids.length > 0) ||
+    params.lead_id ||
+    params.all_unenriched ||
+    params.query,
+  );
+
+  if (params.enrich_staged || !isTargetingDbLeads) {
+    const { data: stagedCandidates } = await supabase
+      .from("prospect_candidates")
+      .select("id, preview, created_at")
+      .eq("session_id", ctx.sessionId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (
+      stagedCandidates &&
+      stagedCandidates.length > 0 &&
+      (params.enrich_staged || !isTargetingDbLeads)
+    ) {
+      const domainsToEnrich: string[] = [];
+      const rowDomainMap = new Map<string, string>();
+
+      for (const row of stagedCandidates) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const preview = row.preview as any;
+        const resolvedDomain =
+          params.domain?.trim() ||
+          preview?.domain ||
+          (preview?.company ? guessDomainFromCompany(preview.company) : null);
+        if (resolvedDomain) {
+          domainsToEnrich.push(resolvedDomain);
+          rowDomainMap.set(row.id, resolvedDomain);
+        }
+      }
+
+      const enrichmentMap = await enrichMultipleDomainsDirect(domainsToEnrich, {
+        userId: ctx.userId,
+        concurrency: 3,
+      });
+
+      let enrichedCount = 0;
+      let totalPhones = 0;
+      let totalEmails = 0;
+      const candidatesSummary: Array<{
+        name: string;
+        company: string;
+        domain: string | null;
+        phone: string | null;
+        email: string | null;
+        key_contacts: Array<{ name: string; title: string }>;
+        status: "enriched" | "partial" | "failed" | "no_domain";
+      }> = [];
+
+      for (const row of stagedCandidates) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const preview = row.preview as any;
+        const domain = rowDomainMap.get(row.id);
+        const enrichment = domain ? enrichmentMap.get(domain) : undefined;
+
+        if (enrichment && enrichment.success) {
+          const primaryPhone = enrichment.phones[0] ?? null;
+          const primaryEmail = enrichment.emails[0] ?? null;
+          if (primaryPhone) totalPhones++;
+          if (primaryEmail) totalEmails++;
+          if (
+            primaryPhone ||
+            primaryEmail ||
+            enrichment.key_contacts.length > 0
+          ) {
+            enrichedCount++;
+          }
+
+          const updatedPreview = {
+            ...preview,
+            domain: domain || preview.domain,
+            phone: primaryPhone || preview.phone || null,
+            email: primaryEmail || preview.email || null,
+            public_contacts: {
+              phones: enrichment.phones,
+              emails: enrichment.emails,
+              key_contacts: enrichment.key_contacts,
+              social_links: enrichment.social_links,
+            },
+            is_enriched: true,
+          };
+
+          await supabase
+            .from("prospect_candidates")
+            .update({ preview: updatedPreview })
+            .eq("id", row.id);
+
+          candidatesSummary.push({
+            name: preview.name || "Leadership Team",
+            company: preview.company || "Company",
+            domain: domain || null,
+            phone: primaryPhone,
+            email: primaryEmail,
+            key_contacts: enrichment.key_contacts,
+            status:
+              primaryPhone && primaryEmail
+                ? "enriched"
+                : primaryPhone || primaryEmail
+                  ? "partial"
+                  : "failed",
+          });
+        } else {
+          candidatesSummary.push({
+            name: preview.name || "Leadership Team",
+            company: preview.company || "Company",
+            domain: domain || null,
+            phone: null,
+            email: null,
+            key_contacts: [],
+            status: domain ? "failed" : "no_domain",
+          });
+        }
+      }
+
+      return {
+        success: true,
+        mode: "staged",
+        total_staged: stagedCandidates.length,
+        enriched_count: enrichedCount,
+        phones_found: totalPhones,
+        emails_found: totalEmails,
+        candidates: candidatesSummary,
+        message: `Extracted verified public contacts for ${enrichedCount}/${stagedCandidates.length} staged companies using web crawler. Found ${totalPhones} phone number(s) and ${totalEmails} verified business email(s).`,
+      };
+    }
+  }
+
+  // 2. Otherwise, gather candidate lead rows from existing database leads:
+  let candidateRows: Array<{
+    id: string;
+    input_name: string | null;
+    input_company: string | null;
+    company_domain: string | null;
+    enrichment_status: string | null;
+  }> = [];
+
+  if (Array.isArray(params.lead_ids) && params.lead_ids.length > 0) {
+    const { data } = await supabase
+      .from("prospects")
+      .select(
+        "id, input_name, input_company, company_domain, enrichment_status",
+      )
+      .eq("user_id", ctx.userId)
+      .in("id", params.lead_ids.slice(0, limit));
+    candidateRows = data ?? [];
+  } else if (params.lead_id) {
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        params.lead_id.trim(),
+      );
+    if (isUuid) {
+      const { data } = await supabase
+        .from("prospects")
+        .select(
+          "id, input_name, input_company, company_domain, enrichment_status",
+        )
+        .eq("user_id", ctx.userId)
+        .eq("id", params.lead_id.trim())
+        .maybeSingle();
+      if (data) candidateRows = [data];
+    } else {
+      const { data } = await supabase
+        .from("prospects")
+        .select(
+          "id, input_name, input_company, company_domain, enrichment_status",
+        )
+        .eq("user_id", ctx.userId)
+        .or(
+          `input_name.ilike.%${params.lead_id.trim()}%,input_company.ilike.%${params.lead_id.trim()}%`,
+        )
+        .limit(1);
+      candidateRows = data ?? [];
+    }
+  } else if (params.all_unenriched) {
+    const { data } = await supabase
+      .from("prospects")
+      .select(
+        "id, input_name, input_company, company_domain, enrichment_status",
+      )
+      .eq("user_id", ctx.userId)
+      .or(
+        "enrichment_status.is.null,enrichment_status.eq.not_started,enrichment_status.eq.failed",
+      )
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    candidateRows = data ?? [];
+  } else if (params.query) {
+    const q = params.query.trim();
+    const { data } = await supabase
+      .from("prospects")
+      .select(
+        "id, input_name, input_company, company_domain, enrichment_status",
+      )
+      .eq("user_id", ctx.userId)
+      .or(
+        `input_name.ilike.%${q}%,input_company.ilike.%${q}%,company_domain.ilike.%${q}%`,
+      )
+      .limit(limit);
+    candidateRows = data ?? [];
+  } else {
+    // Default fallback: take the most recent leads added that aren't completed
+    const { data } = await supabase
+      .from("prospects")
+      .select(
+        "id, input_name, input_company, company_domain, enrichment_status",
+      )
+      .eq("user_id", ctx.userId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    candidateRows = data ?? [];
+  }
+
+  if (candidateRows.length === 0) {
+    return {
+      success: false,
+      count: 0,
+      message: "No matching leads found in your account to enrich.",
+    };
+  }
+
+  const results: Array<{
+    lead_id: string;
+    name: string | null;
+    company: string | null;
+    domain: string | null;
+    status: string;
+    error?: string;
+  }> = [];
+
+  for (const row of candidateRows) {
+    const resolvedDomain =
+      params.domain?.trim() ||
+      row.company_domain ||
+      (row.input_company ? guessDomainFromCompany(row.input_company) : null);
+
+    if (!resolvedDomain) {
+      results.push({
+        lead_id: row.id,
+        name: row.input_name,
+        company: row.input_company,
+        domain: null,
+        status: "skipped",
+        error: "No company domain found or inferrable",
+      });
+      continue;
+    }
+
+    try {
+      if (!row.company_domain && resolvedDomain) {
+        await supabase
+          .from("prospects")
+          .update({ company_domain: resolvedDomain })
+          .eq("id", row.id)
+          .eq("user_id", ctx.userId);
+      }
+
+      const res = await enqueueProspectEnrichment({
+        userId: ctx.userId,
+        prospectId: row.id,
+        domain: resolvedDomain,
+      });
+
+      results.push({
+        lead_id: row.id,
+        name: row.input_name,
+        company: row.input_company,
+        domain: resolvedDomain,
+        status: res.status,
+      });
+    } catch (err: unknown) {
+      results.push({
+        lead_id: row.id,
+        name: row.input_name,
+        company: row.input_company,
+        domain: resolvedDomain,
+        status: "failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const enqueuedCount = results.filter((r) => r.status === "queued").length;
+  const reusedCount = results.filter(
+    (r) =>
+      r.status !== "queued" && r.status !== "failed" && r.status !== "skipped",
+  ).length;
+
+  return {
+    success: true,
+    total_matched: candidateRows.length,
+    enqueued_count: enqueuedCount,
+    reused_count: reusedCount,
+    results,
+    message: `Queued public contact crawler enrichment for ${enqueuedCount} lead(s) (${reusedCount} already active/cached). The crawler will visit their official websites to extract phones, emails, and key leadership contacts.`,
   };
 }
 
@@ -614,6 +1198,7 @@ export async function handleStartBulkJob(
     count: totalCreditsNeeded,
     jobId: job.id as string,
     reason: `bulk_enrichment_${candidates.length}_leads`,
+    idempotencyKey: `bulk_enrichment:${job.id}`,
   });
   if (!deduction.ok) {
     await supabase
@@ -714,6 +1299,7 @@ export async function handleStartBulkJob(
   // 4. Persist prospects.
   const prospectInserts = drafts.map(
     ({ candidate, draft, domain, email, email_source, email_confidence }) => ({
+      user_id: ctx.userId,
       job_id: job.id,
       input_source: "chat_search",
       input_name: candidate.name,
@@ -722,6 +1308,7 @@ export async function handleStartBulkJob(
       status: "completed" as const,
       company_domain: domain,
       email,
+      ...buildProspectIdentity({ email }),
       email_source,
       email_confidence,
       research_summary: draft?.research_summary ?? null,
@@ -918,6 +1505,7 @@ export async function handleEnrichIntakeJob(
     count: totalCreditsNeeded,
     jobId: params.job_id,
     reason: `intake_enrichment_${rawProspects.length}_leads`,
+    idempotencyKey: `intake_enrichment:${params.job_id}`,
   });
   if (!deduction.ok) {
     return { error: deduction.error ?? "Failed to deduct credits." };
@@ -988,6 +1576,10 @@ export async function handleEnrichIntakeJob(
           email: emailUpdate,
           email_source: emailSource,
           email_confidence: emailConfidence,
+          ...buildProspectIdentity({
+            email: emailUpdate,
+            phone: p.phone as string | null,
+          }),
         }),
         research_summary: draft?.research_summary ?? null,
         email_subject: draft?.email_subject ?? null,
@@ -1056,6 +1648,31 @@ async function mapConcurrent<T, R>(
 export async function handleSearchLeads(
   params: {
     query?: string;
+    call_status?:
+      | "not_called"
+      | "called"
+      | "no_answer"
+      | "answered"
+      | "busy"
+      | "completed"
+      | "failed"
+      | "any";
+    time_range?:
+      | "today"
+      | "yesterday"
+      | "this_week"
+      | "last_30_days"
+      | "all_time";
+    created_after?: string;
+    created_before?: string;
+    has_phone?: boolean;
+    availability?:
+      | "available_now"
+      | "available_later"
+      | "callback_requested"
+      | "has_next_action"
+      | "unknown"
+      | "any";
     lead_status?: string;
     qualification_bucket?: string;
     only_with_replies?: boolean;
@@ -1064,49 +1681,39 @@ export async function handleSearchLeads(
   ctx: ToolContext,
 ) {
   const supabase = createAdminClient();
-  const limit = Math.min(params.limit ?? 25, 50);
-
-  const { data: userJobs } = await supabase
-    .from("jobs")
-    .select("id")
-    .eq("user_id", ctx.userId);
-
-  const jobIds = (userJobs ?? []).map((j) => j.id as string);
-  if (!jobIds.length) {
-    return {
-      count: 0,
-      leads: [],
-      message:
-        "No leads found in your account. Add leads via Lead Intake at /app/leads.",
-    };
-  }
+  const limit = Math.min(params.limit ?? 25, 100);
 
   let q = supabase
     .from("prospects")
     .select(
-      "id,job_id,input_name,input_company,input_title,email,phone,status,lead_status,qualification_bucket,next_action,email_subject,email_body,research_summary,handoff_summary,created_at",
+      "id,job_id,input_name,input_company,input_title,email,phone,phone_hash,normalized_phone_e164,status,lead_status,qualification_bucket,next_action,email_subject,email_body,research_summary,handoff_summary,created_at",
     )
-    .in("job_id", jobIds)
+    .eq("user_id", ctx.userId)
     .order("created_at", { ascending: false })
-    // Apply the user-facing limit only after reply data has been attached and
-    // filtered. Limiting here caused older prospects with recent replies to be
-    // silently excluded from "recent replies" searches.
     .limit(1000);
 
-  if (params.lead_status) {
+  if (
+    params.lead_status &&
+    params.lead_status !== "any" &&
+    params.lead_status !== "all"
+  ) {
     q = q.eq("lead_status", params.lead_status);
   }
-  if (params.qualification_bucket) {
+  if (
+    params.qualification_bucket &&
+    params.qualification_bucket !== "any" &&
+    params.qualification_bucket !== "all"
+  ) {
     q = q.eq("qualification_bucket", params.qualification_bucket);
   }
 
   const { data: rows, error } = await q;
-  if (error) return { error: error.message, count: 0, leads: [] };
+  if (error) return { error: "lead_search_failed", count: 0, leads: [] };
 
   const prospectList = rows ?? [];
   const prospectIds = prospectList.map((p) => p.id as string);
 
-  // Fetch recipients & replies for these prospects
+  // 1. Fetch recipients & replies for these prospects
   const { data: recipients } =
     prospectIds.length > 0
       ? await supabase
@@ -1160,12 +1767,81 @@ export async function handleSearchLeads(
     }
   }
 
-  // Attach reply to each prospect
-  let enrichedList = prospectList.map((p) => {
+  // 2. Multi-tenant voice executions: strictly scoped to ctx.userId
+  const { data: voiceExecs } =
+    prospectIds.length > 0
+      ? await supabase
+          .from("voice_executions")
+          .select(
+            "id,prospect_id,recipient_phone_hash,status,provider_status,outcome,duration_seconds,counts_toward_call_limit,created_at",
+          )
+          .eq("user_id", ctx.userId)
+          .in("prospect_id", prospectIds)
+          .order("created_at", { ascending: false })
+      : { data: [] };
+
+  const prospectToCalls = new Map<
+    string,
+    Array<{
+      id: string;
+      status: string;
+      provider_status: string | null;
+      outcome: string | null;
+      duration_seconds: number | null;
+      created_at: string;
+    }>
+  >();
+  const personToCalls = new Map<
+    string,
+    Array<{
+      id: string;
+      status: string;
+      provider_status: string | null;
+      outcome: string | null;
+      duration_seconds: number | null;
+      created_at: string;
+    }>
+  >();
+
+  for (const call of voiceExecs ?? []) {
+    const normalized = {
+      id: call.id as string,
+      status: (call.status as string) ?? "unknown",
+      provider_status: (call.provider_status as string) ?? null,
+      outcome: (call.outcome as string) ?? null,
+      duration_seconds: (call.duration_seconds as number) ?? null,
+      created_at: (call.created_at as string) ?? new Date().toISOString(),
+    };
+    const pId = call.prospect_id as string | null;
+    if (pId) {
+      const existing = prospectToCalls.get(pId) ?? [];
+      existing.push(normalized);
+      prospectToCalls.set(pId, existing);
+    }
+    const personHash = call.recipient_phone_hash as string | null;
+    if (personHash && call.counts_toward_call_limit !== false) {
+      const existing = personToCalls.get(personHash) ?? [];
+      existing.push(normalized);
+      personToCalls.set(personHash, existing);
+    }
+  }
+
+  // 3. Attach replies and call history to each prospect
+  let enrichedList: LeadForFiltering[] = prospectList.map((p) => {
     const reply = prospectToReply.get(p.id as string);
+    const directCalls = prospectToCalls.get(p.id as string) ?? [];
+    const personCalls =
+      (p.phone_hash ? personToCalls.get(String(p.phone_hash)) : undefined) ??
+      [];
+    // Use canonical person identity if it exists. This prevents duplicate lead
+    // rows for one phone number from appearing as uncalled after a prior call.
+    const calls = personCalls.length ? personCalls : directCalls;
+    const latestCall = calls[0] ?? null;
     return {
       ...p,
       latest_reply: reply ?? null,
+      calls,
+      latest_call: latestCall,
     };
   });
 
@@ -1173,56 +1849,29 @@ export async function handleSearchLeads(
     enrichedList = enrichedList.filter((p) => Boolean(p.latest_reply));
   }
 
-  // Smart Query Filter
-  if (params.query?.trim()) {
-    const term = params.query.trim().toLowerCase();
-
-    const asksForQualified =
-      term.includes("qualified") ||
-      term.includes("hot") ||
-      term.includes("warm");
-    const asksForReplies =
-      term.includes("reply") ||
-      term.includes("replies") ||
-      term.includes("inbound");
-
-    // Compound requests require both qualification and an actual inbound
-    // reply. Previously the qualified branch won and ignored "recent replies".
-    if (asksForQualified) {
-      enrichedList = enrichedList.filter(
-        (r) =>
-          (!asksForReplies || Boolean(r.latest_reply)) &&
-          (r.lead_status === "qualified" ||
-            r.lead_status === "engaged" ||
-            r.qualification_bucket === "hot" ||
-            r.qualification_bucket === "warm" ||
-            r.latest_reply?.category === "interested"),
-      );
-    } else if (asksForReplies) {
-      enrichedList = enrichedList.filter(
-        (r) =>
-          Boolean(r.latest_reply) ||
-          r.lead_status === "replied" ||
-          r.lead_status === "qualified" ||
-          r.input_name?.toLowerCase().includes(term) ||
-          r.input_company?.toLowerCase().includes(term),
-      );
-    } else {
-      enrichedList = enrichedList.filter(
-        (r) =>
-          r.input_name?.toLowerCase().includes(term) ||
-          r.input_company?.toLowerCase().includes(term) ||
-          r.email?.toLowerCase().includes(term) ||
-          r.input_title?.toLowerCase().includes(term) ||
-          r.lead_status?.toLowerCase().includes(term) ||
-          r.qualification_bucket?.toLowerCase().includes(term) ||
-          r.latest_reply?.snippet?.toLowerCase().includes(term),
-      );
-    }
+  // 4. Apply pure filters from lead-search-core
+  enrichedList = filterLeadsByCallStatus(enrichedList, params.call_status);
+  if (params.has_phone === true) {
+    enrichedList = filterLeadsByPhone(enrichedList, true);
+  } else if (
+    params.has_phone === false &&
+    /\b(no|without|missing)\s+phone\b/i.test(params.query ?? "")
+  ) {
+    enrichedList = filterLeadsByPhone(enrichedList, false);
   }
+  enrichedList = filterLeadsByTimeRange(enrichedList, params.time_range);
+  if (params.created_after)
+    enrichedList = enrichedList.filter(
+      (p) => p.created_at >= params.created_after!,
+    );
+  if (params.created_before)
+    enrichedList = enrichedList.filter(
+      (p) => p.created_at <= params.created_before!,
+    );
+  enrichedList = filterLeadsByAvailability(enrichedList, params.availability);
+  enrichedList = filterLeadsByQuery(enrichedList, params.query);
 
-  // Reply-oriented results should mean "recent replies", not merely recently
-  // created prospect rows. Prospects without replies naturally sort last.
+  // Reply-oriented results naturally sort latest reply first
   if (
     params.only_with_replies ||
     /\b(reply|replies|inbound)\b/i.test(params.query ?? "")
@@ -1238,29 +1887,45 @@ export async function handleSearchLeads(
 
   return {
     count: enrichedList.length,
-    leads: enrichedList.map((r) => ({
-      lead_id: r.id as string,
-      job_id: r.job_id as string,
-      name: r.input_name,
-      company: r.input_company,
-      title: r.input_title,
-      email: r.email,
-      phone: r.phone,
-      lead_status: r.lead_status,
-      qualification_bucket: r.qualification_bucket ?? "not_determined",
-      next_action: r.next_action ?? "none",
-      latest_inbound_reply: r.latest_reply?.snippet ?? null,
-      reply_category: r.latest_reply?.category ?? null,
-      wants_meeting: r.latest_reply?.wants_meeting ?? false,
-      handoff_summary: r.handoff_summary ?? null,
-      has_draft_email: Boolean(r.email_subject && r.email_body),
-      outbound_email_subject: r.email_subject,
-      outbound_email_body: r.email_body,
-    })),
+    leads: enrichedList.map((r) => {
+      const calls = (r.calls as Array<{ duration_seconds?: number }>) ?? [];
+      return {
+        lead_id: r.id,
+        job_id: (r as unknown as { job_id: string }).job_id,
+        name: r.input_name,
+        company: r.input_company,
+        title: r.input_title,
+        email: r.email,
+        phone: r.phone,
+        lead_status: r.lead_status,
+        qualification_bucket: r.qualification_bucket ?? "not_determined",
+        next_action: r.next_action ?? "none",
+        created_at: r.created_at,
+        call_summary: {
+          call_count: calls.length,
+          last_call_status: r.latest_call?.status ?? "not_called",
+          last_call_outcome: r.latest_call?.outcome ?? null,
+          last_call_at: r.latest_call?.created_at ?? null,
+          last_duration_seconds: r.latest_call?.duration_seconds ?? null,
+        },
+        latest_inbound_reply: r.latest_reply?.snippet ?? null,
+        reply_category: r.latest_reply?.category ?? null,
+        wants_meeting: r.latest_reply?.wants_meeting ?? false,
+        handoff_summary: r.handoff_summary ?? null,
+        has_draft_email: Boolean(
+          (r as unknown as { email_subject?: string }).email_subject &&
+          (r as unknown as { email_body?: string }).email_body,
+        ),
+        outbound_email_subject: (r as unknown as { email_subject?: string })
+          .email_subject,
+        outbound_email_body: (r as unknown as { email_body?: string })
+          .email_body,
+      };
+    }),
     message:
       enrichedList.length > 0
         ? `Found ${enrichedList.length} matching lead(s) in your account.`
-        : "No matching leads found.",
+        : "No matching leads found in your account.",
   };
 }
 
@@ -1355,6 +2020,7 @@ export async function handleEnrichLead(
     count: cost,
     jobId: prospect.job_id as string,
     reason: `enrich_lead_${prospect.id}`,
+    idempotencyKey: `enrich_lead:${prospect.id}`,
   });
   if (!deduction.ok)
     return { error: deduction.error ?? "Failed to deduct credits." };
@@ -1723,13 +2389,17 @@ export async function handleLaunchCampaign(
 
   // Attempt immediate send for the inserted recipient(s) so test/single sends deliver instantly!
   let immediateSent = 0;
+  let lastSendError: string | null = null;
   const { data: mailbox } = await supabase
     .from("mailboxes")
     .select("id,email_address,oauth_refresh_token_encrypted,physical_address")
     .eq("id", mailboxId)
     .maybeSingle();
 
-  if (mailbox?.oauth_refresh_token_encrypted && insertedRecipients) {
+  if (!mailbox?.oauth_refresh_token_encrypted) {
+    lastSendError =
+      "Mailbox has no active OAuth credentials. Please reconnect your mailbox at Settings → Mailboxes.";
+  } else if (insertedRecipients) {
     for (const r of insertedRecipients) {
       try {
         const unsubToken = makeUnsubToken(r.id as string, ctx.userId);
@@ -1768,9 +2438,20 @@ export async function handleLaunchCampaign(
         });
         immediateSent++;
       } catch (err) {
-        console.error("Immediate send attempt failed, queued for cron:", err);
+        lastSendError = err instanceof Error ? err.message : String(err);
+        console.error("Immediate send attempt failed:", err);
       }
     }
+  }
+
+  // If a single lead was targeted and immediate send failed, surface the error immediately
+  if (params.lead_id && immediateSent === 0) {
+    return {
+      error:
+        lastSendError ||
+        "Immediate email delivery failed. Please check your mailbox connection.",
+      campaign_id: campaign.id,
+    };
   }
 
   if (immediateSent > 0 || recipientInserts.length > 0) {
@@ -2202,4 +2883,963 @@ function detectWantsMeeting(snippet: string | null): boolean {
   return /\b(calendar|calendly|book.*meeting|schedule.*call|set.*up.*call|when.*free|what.*works|let.*chat|let.*talk|hop on.*call|jump on.*call|15.?min|20.?min|30.?min)\b/.test(
     lower,
   );
+}
+
+// Guarded chat entry point into the same service used by the lead page.
+// A model-provided boolean is never accepted as consent on its own.
+export async function handleStartQualificationCall(
+  params: {
+    lead_id: string;
+    confirmed_lawful_permission: boolean;
+    allow_override?: boolean;
+    override_reason?: string;
+    approval_id?: string;
+    idempotency_key?: string;
+  },
+  ctx: ToolContext,
+) {
+  if (!params.confirmed_lawful_permission) return voiceConfirmationRequired();
+
+  const supabase = createAdminClient();
+  const { data: session } = await supabase
+    .from("chat_sessions")
+    .select("id")
+    .eq("id", ctx.sessionId)
+    .eq("user_id", ctx.userId)
+    .maybeSingle();
+  if (!session) return { error: "chat_session_not_found" };
+
+  const { data: messages } = await supabase
+    .from("chat_messages")
+    .select("content,created_at")
+    .eq("session_id", ctx.sessionId)
+    .eq("role", "user")
+    .order("created_at", { ascending: false })
+    .limit(8);
+  const userMessages = (messages ?? [])
+    .slice()
+    .reverse()
+    .map((message) => uiMessageText(message.content))
+    .filter(Boolean);
+  if (!hasExplicitVoiceCallAuthorization(userMessages)) {
+    return voiceConfirmationRequired();
+  }
+
+  try {
+    const result = await startQualificationCall({
+      userId: ctx.userId,
+      leadId: params.lead_id,
+      consentConfirmed: true,
+      allowOverride: params.allow_override,
+      overrideReason: params.override_reason,
+      approvalId: params.approval_id,
+      idempotencyKey: params.idempotency_key,
+      source: "chat",
+    });
+    return {
+      success: result.status !== "already_called",
+      lead_id: params.lead_id,
+      execution_id: result.executionId,
+      orchestration: result.orchestration,
+      status: result.status,
+      provider_execution_id: result.providerExecutionId ?? null,
+      already_called: result.alreadyCalled ?? null,
+      message:
+        result.status === "already_called"
+          ? "A qualification call has already been reserved for this person. Use an explicitly approved Call Again override if a further attempt is justified."
+          : result.status === "scheduled"
+            ? "Qualification call safely scheduled in the configured calling window."
+            : "Qualification call accepted by the voice provider.",
+    };
+  } catch (error) {
+    if (error instanceof VoiceCallStartError) {
+      return { error: error.code, message: error.message };
+    }
+    return {
+      error: "voice_call_start_failed",
+      message: error instanceof Error ? error.message : "Voice call failed.",
+    };
+  }
+}
+
+function voiceConfirmationRequired() {
+  return {
+    error: "confirmation_required",
+    confirmation_required: true,
+    message:
+      'Before calling, ask the user to state: "I confirm we have lawful permission to call this lead."',
+  };
+}
+
+// ---------------------------------------------------------------------
+// Phase 6 autonomous sales control-plane tools
+// ---------------------------------------------------------------------
+
+type ChatApproval = {
+  id: string;
+  token: string;
+  action: string;
+  expiresAt: string;
+};
+
+function approvalHash(value: unknown) {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(value))
+    .digest("hex");
+}
+
+async function createChatApproval(
+  ctx: ToolContext,
+  action: string,
+  channel: "email" | "voice" | "multichannel",
+  scope: Record<string, unknown>,
+  preview: Record<string, unknown>,
+  overrideReason?: string,
+): Promise<ChatApproval> {
+  const db = createAdminClient();
+  const token = crypto.randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+  const { data, error } = await db
+    .from("outreach_action_approvals")
+    .insert({
+      user_id: ctx.userId,
+      session_id: ctx.sessionId,
+      action_kind: action,
+      channel,
+      scope,
+      preview_summary: preview,
+      payload_hash: approvalHash(scope),
+      confirmation_token_hash: approvalHash(token),
+      source: "chat",
+      actor: "authenticated_user",
+      override_reason: overrideReason ?? null,
+      expires_at: expiresAt,
+    })
+    .select("id")
+    .single();
+  if (error || !data) throw new Error("Unable to create an action approval.");
+  return { id: String(data.id), token, action, expiresAt };
+}
+
+function cardConfirmation(
+  approval: ChatApproval,
+  toolName: string,
+  requiresSecondConfirmation = false,
+) {
+  return {
+    tool_name: toolName,
+    approval_id: approval.id,
+    confirmation_token: approval.token,
+    expires_at: approval.expiresAt,
+    requires_confirmation: true,
+    requires_second_confirmation: requiresSecondConfirmation,
+  };
+}
+
+async function resolveSelectedLeadIds(
+  selector: { lead_ids?: string[]; filters?: Record<string, unknown> },
+  ctx: ToolContext,
+) {
+  if (selector.lead_ids?.length) {
+    const db = createAdminClient();
+    const { data, error } = await db
+      .from("prospects")
+      .select("id")
+      .eq("user_id", ctx.userId)
+      .in("id", selector.lead_ids);
+    if (error) throw new Error("Unable to resolve the selected leads.");
+    const owned = (data ?? []).map((row) => String(row.id));
+    return {
+      ids: owned,
+      missing: selector.lead_ids.filter((id) => !owned.includes(id)),
+    };
+  }
+  const result = await handleSearchLeads(
+    { ...(selector.filters ?? {}), limit: 100 },
+    ctx,
+  );
+  if ("error" in result && result.error)
+    throw new Error("Unable to resolve the selected leads.");
+  const ids = (result.leads ?? []).map((lead) => String(lead.lead_id));
+  return { ids, missing: [] as string[] };
+}
+
+async function callEligibilityPreview(userId: string, leadIds: string[]) {
+  const db = createAdminClient();
+  const [{ data: leads }, { data: connection }] = await Promise.all([
+    db
+      .from("prospects")
+      .select("id,phone,lead_status,voice_consent_status")
+      .eq("user_id", userId)
+      .in("id", leadIds),
+    db
+      .from("voice_connections")
+      .select("id,status,calling_timezone,call_start_hour,call_end_hour")
+      .eq("user_id", userId)
+      .eq("provider", "bolna")
+      .maybeSingle(),
+  ]);
+  const connectionReady = Boolean(connection && connection.status === "active");
+  const inWindow =
+    connectionReady &&
+    withinCallingHours(
+      new Date(),
+      String(connection?.calling_timezone ?? "UTC"),
+      Number(connection?.call_start_hour ?? 9),
+      Number(connection?.call_end_hour ?? 18),
+    );
+  const eligible: string[] = [];
+  const blocked: Array<{ lead_id: string; reason: string }> = [];
+  for (const lead of leads ?? []) {
+    if (!connectionReady)
+      blocked.push({
+        lead_id: String(lead.id),
+        reason: "missing_bolna_connection",
+      });
+    else if (!lead.phone)
+      blocked.push({ lead_id: String(lead.id), reason: "missing_phone" });
+    else if (lead.lead_status === "do_not_contact")
+      blocked.push({ lead_id: String(lead.id), reason: "do_not_contact" });
+    else if (!inWindow)
+      blocked.push({
+        lead_id: String(lead.id),
+        reason: "outside_calling_hours",
+      });
+    else eligible.push(String(lead.id));
+  }
+  return { eligible, blocked, connectionReady, inWindow };
+}
+
+export async function handleCreateOrUpdateVoiceAgent(
+  params: VoiceAgentInput,
+  ctx: ToolContext,
+) {
+  if (params.mode === "apply")
+    return {
+      error: "confirmation_card_required",
+      confirmation_required: true,
+      message: "Use the confirmation button on this configuration preview.",
+    };
+  const db = createAdminClient();
+  const { data: connection } = await db
+    .from("voice_connections")
+    .select("id,status,agent_id,agent_management_mode")
+    .eq("user_id", ctx.userId)
+    .eq("provider", "bolna")
+    .maybeSingle();
+  const preview = {
+    operation: params.operation,
+    language: params.language,
+    voice: {
+      provider: params.voice.provider,
+      model: params.voice.model,
+      voice_id: params.voice.voice_id,
+      name: params.voice.name,
+    },
+    tone: params.tone,
+    welcome_message: params.welcome_message,
+    transfer_enabled: Boolean(params.transfer_number),
+    max_call_seconds: params.max_call_seconds,
+    max_turns: params.max_turns,
+    connected: Boolean(connection?.status === "active"),
+  };
+  if (!connection || connection.status !== "active")
+    return {
+      error: "missing_bolna_connection",
+      preview,
+      message: "Connect and verify Bolna before configuring an agent.",
+    };
+  const approval = await createChatApproval(
+    ctx,
+    "voice_agent_configuration",
+    "voice",
+    { input: params, connectionId: String(connection.id) },
+    preview,
+  );
+  return {
+    mode: "preview",
+    preview,
+    confirmation: cardConfirmation(approval, "create_or_update_voice_agent"),
+  };
+}
+
+export async function handleStartQualificationCallsBatch(
+  params: QualificationBatchInput,
+  ctx: ToolContext,
+) {
+  if (params.mode === "apply")
+    return {
+      error: "confirmation_card_required",
+      confirmation_required: true,
+      message: "Use the confirmation button on the exact call preview.",
+    };
+  if (!params.confirmed_lawful_permission) return voiceConfirmationRequired();
+  const selected = await resolveSelectedLeadIds(params, ctx);
+  if (params.allow_override && selected.ids.length !== 1)
+    return {
+      error: "single_call_override_only",
+      message: "A Call Again override can only apply to one exact lead.",
+    };
+  const review = await callEligibilityPreview(ctx.userId, selected.ids);
+  const preview = {
+    requested: selected.ids.length + selected.missing.length,
+    eligible_lead_ids: review.eligible,
+    blocked: [
+      ...review.blocked,
+      ...selected.missing.map((lead_id) => ({
+        lead_id,
+        reason: "lead_not_found",
+      })),
+    ],
+    estimated_bolna_provider_cost:
+      "Bolna bills provider spend directly; an estimate is unavailable until the provider rates this call.",
+    safety_warnings: review.blocked.length
+      ? ["Blocked leads will not be called."]
+      : [],
+  };
+  const approval = await createChatApproval(
+    ctx,
+    "qualification_calls_batch",
+    "voice",
+    {
+      leadIds: review.eligible,
+      idempotencyKey: params.idempotency_key,
+      allowOverride: params.allow_override,
+      overrideReason: params.override_reason ?? null,
+    },
+    preview,
+    params.override_reason,
+  );
+  return {
+    mode: "preview",
+    preview,
+    confirmation: cardConfirmation(
+      approval,
+      "start_qualification_calls_batch",
+      params.allow_override,
+    ),
+  };
+}
+
+export async function handleScheduleLeadFollowup(
+  params: FollowupInput,
+  ctx: ToolContext,
+) {
+  if (params.mode === "apply")
+    return {
+      error: "confirmation_card_required",
+      confirmation_required: true,
+      message: "Use the confirmation button on the follow-up preview.",
+    };
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: params.timezone }).format();
+  } catch {
+    return { error: "invalid_timezone", message: "Use a valid IANA timezone." };
+  }
+  if (new Date(params.scheduled_at).getTime() <= Date.now())
+    return {
+      error: "scheduled_time_in_past",
+      message: "Choose a future follow-up time.",
+    };
+  const db = createAdminClient();
+  const { data: lead } = await db
+    .from("prospects")
+    .select("id,input_name,lead_status")
+    .eq("id", params.lead_id)
+    .eq("user_id", ctx.userId)
+    .maybeSingle();
+  if (!lead) return { error: "lead_not_found", message: "Lead not found." };
+  const preview = {
+    lead_id: String(lead.id),
+    lead_name: lead.input_name ?? null,
+    channel: params.channel,
+    scheduled_at: params.scheduled_at,
+    timezone: params.timezone,
+    local_time: new Intl.DateTimeFormat("en-US", {
+      timeZone: params.timezone,
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(params.scheduled_at)),
+    lead_status: lead.lead_status ?? "new",
+  };
+  const approval = await createChatApproval(
+    ctx,
+    "lead_followup",
+    params.channel,
+    { input: params },
+    preview,
+  );
+  return {
+    mode: "preview",
+    preview,
+    confirmation: cardConfirmation(approval, "schedule_lead_followup"),
+  };
+}
+
+export async function handleSyncCrmLeads(
+  params: CrmSyncInput,
+  ctx: ToolContext,
+) {
+  if (params.mode === "apply")
+    return {
+      error: "confirmation_card_required",
+      confirmation_required: true,
+      message: "Use the confirmation button on the CRM sync preview.",
+    };
+  try {
+    const result = await previewCrmPull(
+      createAdminClient() as unknown as CrmPullDatabase,
+      ctx.userId,
+      params.provider as CrmProvider,
+      { limit: params.limit, modifiedAfter: params.modified_after },
+      { sessionId: ctx.sessionId, source: "chat" },
+    );
+    return {
+      mode: "preview",
+      provider: params.provider,
+      estimates: result.summary,
+      next_cursor: result.nextCursor,
+      confirmation: {
+        tool_name: "sync_crm_leads",
+        approval_id: result.approvalId,
+        confirmation_token: result.confirmationToken,
+        requires_confirmation: true,
+      },
+    };
+  } catch (error) {
+    return {
+      error: "crm_preview_failed",
+      message:
+        error instanceof Error
+          ? error.message.replace(/Bearer\s+\S+/gi, "[redacted]")
+          : "CRM preview could not be completed.",
+    };
+  }
+}
+
+export async function handleGetCallDetailsAndAnalytics(
+  params: CallDetailsInput,
+  ctx: ToolContext,
+) {
+  const db = createAdminClient();
+  if (params.execution_id) {
+    const { data: execution } = await db
+      .from("voice_executions")
+      .select(
+        "id,prospect_id,status,provider_status,outcome,duration_seconds,answered,started_at,answered_at,completed_at,cost_minor_units,cost_currency,cost_unit,transcript,recording_url,created_at",
+      )
+      .eq("id", params.execution_id)
+      .eq("user_id", ctx.userId)
+      .maybeSingle();
+    if (!execution)
+      return {
+        error: "execution_not_found",
+        message: "Call execution not found.",
+      };
+    return {
+      execution: {
+        ...execution,
+        transcript: params.include_transcript
+          ? (execution.transcript ?? null)
+          : undefined,
+        recording_available: params.include_recording
+          ? Boolean(execution.recording_url)
+          : false,
+        recording_url: undefined,
+      },
+      billing: {
+        bolna_provider_spend: "billed directly by Bolna",
+        salesengai_platform_credits: "separate",
+      },
+    };
+  }
+  const analytics = await getVoiceAnalytics(
+    ctx.userId,
+    {
+      from: params.from,
+      to: params.to,
+      prospectId: params.lead_id,
+      limit: params.limit,
+    },
+    db,
+  );
+  const credits = await checkCredits(ctx.userId, 0);
+  return {
+    analytics,
+    platform_credits_remaining: credits.remaining,
+    billing: {
+      bolna_provider_spend: "billed directly by Bolna",
+      salesengai_platform_credits: "separate",
+    },
+  };
+}
+
+export async function handleTriggerOutreachRun(
+  params: TriggerOutreachInput,
+  ctx: ToolContext,
+) {
+  if (params.mode === "apply")
+    return {
+      error: "confirmation_card_required",
+      confirmation_required: true,
+      message: "Use the confirmation button on the outreach preview.",
+    };
+  if (params.channel_strategy === "sequence")
+    return {
+      error: "sequence_strategy_requires_schedule",
+      message:
+        "Sequence runs must be configured through the existing outreach scheduler.",
+    };
+  if (
+    (params.channel_strategy === "voice" ||
+      params.channel_strategy === "smart_both") &&
+    !params.confirmed_lawful_permission
+  )
+    return voiceConfirmationRequired();
+  const selected = await resolveSelectedLeadIds(params, ctx);
+  const channel = params.channel_strategy as OutreachChannel;
+  const previewResult = await dispatchAutonomousOutreach({
+    userId: ctx.userId,
+    requestedBy: "chat",
+    channel,
+    prospectIds: selected.ids,
+    approvalId: "preview",
+    idempotencyKey: params.idempotency_key,
+    dryRun: true,
+  });
+  const preview = {
+    ...previewResult,
+    missing_lead_ids: selected.missing,
+    platform_credit_label: "SalesEngAI platform credits",
+    bolna_cost_label: "Bolna provider spend — billed directly by Bolna",
+  };
+  const approval = await createChatApproval(
+    ctx,
+    "autonomous_outreach",
+    channel === "smart_both" ? "multichannel" : channel,
+    {
+      channel,
+      prospectIds: selected.ids,
+      filters: null,
+      idempotencyKey: params.idempotency_key,
+    },
+    preview,
+    params.override_reason,
+  );
+  return {
+    mode: "preview",
+    preview,
+    confirmation: cardConfirmation(
+      approval,
+      "trigger_outreach_run",
+      params.allow_override,
+    ),
+  };
+}
+
+export async function applyApprovedChatAction(input: {
+  userId: string;
+  sessionId: string;
+  approvalId: string;
+  confirmationToken: string;
+  overrideConfirmed?: boolean;
+}) {
+  const db = createAdminClient();
+  const { data: approval } = await db
+    .from("outreach_action_approvals")
+    .select(
+      "id,action_kind,scope,expires_at,consumed_at,session_id,confirmation_token_hash,override_reason",
+    )
+    .eq("id", input.approvalId)
+    .eq("user_id", input.userId)
+    .eq("session_id", input.sessionId)
+    .eq("confirmation_token_hash", approvalHash(input.confirmationToken))
+    .maybeSingle();
+  if (
+    !approval ||
+    approval.consumed_at ||
+    (approval.expires_at &&
+      new Date(String(approval.expires_at)).getTime() <= Date.now())
+  )
+    return {
+      error: "approval_not_found_or_expired",
+      message: "This confirmation is unavailable. Preview the action again.",
+    };
+  const scope = (approval.scope ?? {}) as Record<string, unknown>;
+  const action = String(approval.action_kind);
+  if (action === "crm_pull") {
+    const provider = scope.provider as CrmProvider;
+    const options = (scope.options ?? {}) as {
+      limit?: number;
+      modifiedAfter?: string;
+      cursor?: string;
+    };
+    try {
+      return {
+        action,
+        result: await applyCrmPull(
+          db as unknown as CrmPullDatabase,
+          input.userId,
+          { provider, options, confirmationToken: input.confirmationToken },
+        ),
+      };
+    } catch {
+      return {
+        error: "crm_apply_failed",
+        message:
+          "CRM sync could not be completed. Preview it again before retrying.",
+      };
+    }
+  }
+  if (
+    action === "qualification_calls_batch" &&
+    scope.allowOverride === true &&
+    !input.overrideConfirmed
+  )
+    return {
+      error: "second_confirmation_required",
+      requires_second_confirmation: true,
+      message:
+        "Confirm Call Again once more; the recorded reason will be audited.",
+    };
+  const { error: confirmError } = await db
+    .from("outreach_action_approvals")
+    .update({
+      confirmed_at: new Date().toISOString(),
+      consent_attestation: {
+        confirmed: true,
+        source: "chat_confirmation_button",
+      },
+    })
+    .eq("id", approval.id)
+    .eq("user_id", input.userId)
+    .is("consumed_at", null);
+  if (confirmError)
+    return {
+      error: "approval_confirmation_failed",
+      message: "Unable to confirm this action.",
+    };
+  if (action === "voice_agent_configuration")
+    return applyVoiceAgentConfiguration(db, input.userId, approval.id, scope);
+  if (action === "qualification_calls_batch")
+    return applyQualificationBatch(db, input.userId, approval.id, scope);
+  if (action === "lead_followup")
+    return applyLeadFollowup(db, input.userId, approval.id, scope);
+  if (action === "autonomous_outreach") {
+    const result = await dispatchAutonomousOutreach({
+      userId: input.userId,
+      requestedBy: "chat",
+      channel: scope.channel as OutreachChannel,
+      prospectIds: Array.isArray(scope.prospectIds)
+        ? scope.prospectIds.map(String)
+        : undefined,
+      approvalId: String(approval.id),
+      idempotencyKey: String(scope.idempotencyKey),
+    });
+    return {
+      action,
+      result,
+      status_link: result.runId ? `/app/outreach/runs/${result.runId}` : null,
+    };
+  }
+  return {
+    error: "unsupported_approval",
+    message: "This action is unavailable.",
+  };
+}
+
+async function applyLeadFollowup(
+  db: ReturnType<typeof createAdminClient>,
+  userId: string,
+  approvalId: string,
+  scope: Record<string, unknown>,
+) {
+  const params = (scope.input ?? {}) as FollowupInput;
+  const { data: lead } = await db
+    .from("prospects")
+    .select("id,lead_status,phone,email")
+    .eq("id", params.lead_id)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (
+    !lead ||
+    lead.lead_status === "do_not_contact" ||
+    (params.channel === "voice" && !lead.phone) ||
+    (params.channel === "email" && !lead.email)
+  )
+    return {
+      error: "followup_no_longer_eligible",
+      message: "This lead is no longer eligible for the requested follow-up.",
+    };
+  const insert = {
+    user_id: userId,
+    prospect_id: params.lead_id,
+    channel: params.channel,
+    scheduled_at: params.scheduled_at,
+    timezone: params.timezone,
+    note: params.note ?? null,
+    created_by: "chat",
+    idempotency_key: params.idempotency_key,
+    approval_id: approvalId,
+  };
+  let { data, error } = await db
+    .from("lead_followups")
+    .insert(insert)
+    .select("id,status,scheduled_at,timezone")
+    .maybeSingle();
+  if (error && String(error.code) === "23505") {
+    const existing = await db
+      .from("lead_followups")
+      .select("id,status,scheduled_at,timezone")
+      .eq("user_id", userId)
+      .eq("idempotency_key", params.idempotency_key)
+      .maybeSingle();
+    data = existing.data;
+    error = existing.error;
+  }
+  if (error || !data)
+    return {
+      error: "followup_create_failed",
+      message: "Unable to schedule the follow-up.",
+    };
+  // The Phase 3 dispatcher consumes this one-use approval at the scheduled
+  // execution time. Keep it current just long enough for that revalidation.
+  await db
+    .from("outreach_action_approvals")
+    .update({
+      expires_at: new Date(
+        new Date(params.scheduled_at).getTime() + 24 * 60 * 60_000,
+      ).toISOString(),
+    })
+    .eq("id", approvalId)
+    .eq("user_id", userId)
+    .is("consumed_at", null);
+  await inngest.send({
+    name: "lead/followup.scheduled",
+    data: {
+      followupId: String(data.id),
+      userId,
+      scheduledAt: params.scheduled_at,
+    },
+  });
+  const escalationRequested =
+    /\b(human|salesperson|escalat(?:e|ion)|takeover|manual review)\b/i.test(
+      String(params.note ?? ""),
+    );
+  if (escalationRequested) {
+    await createLeadHandoff(db, {
+      userId,
+      prospectId: String(params.lead_id),
+      sourceType: "agent_tool",
+      sourceId: approvalId,
+      reason: "follow_up_requested",
+      dueAt: params.scheduled_at,
+      conversationSummary:
+        params.note ?? `A ${params.channel} follow-up needs human ownership.`,
+      priority: "normal",
+    });
+    await deliverLeadHandoffNotifications(db, 2);
+  }
+  return {
+    action: "lead_followup",
+    result: {
+      followup_id: data.id,
+      status: data.status,
+      scheduled_at: data.scheduled_at,
+      timezone: data.timezone,
+    },
+  };
+}
+
+async function applyQualificationBatch(
+  db: ReturnType<typeof createAdminClient>,
+  userId: string,
+  approvalId: string,
+  scope: Record<string, unknown>,
+) {
+  const ids = Array.isArray(scope.leadIds)
+    ? scope.leadIds.map(String).slice(0, 100)
+    : [];
+  const key = String(scope.idempotencyKey ?? approvalId);
+  const allowOverride = scope.allowOverride === true;
+  const overrideReason =
+    typeof scope.overrideReason === "string" ? scope.overrideReason : undefined;
+  const outcomes = await Promise.all(
+    ids.map(async (leadId) => {
+      try {
+        const call = await startQualificationCall({
+          userId,
+          leadId,
+          consentConfirmed: true,
+          allowOverride,
+          overrideReason,
+          approvalId: allowOverride ? approvalId : undefined,
+          idempotencyKey: `${key}:${leadId}`,
+          source: "chat",
+        });
+        return {
+          lead_id: leadId,
+          status: call.status,
+          execution_id: call.executionId,
+        };
+      } catch (error) {
+        return {
+          lead_id: leadId,
+          status: "blocked",
+          error:
+            error instanceof VoiceCallStartError
+              ? error.code
+              : "call_start_failed",
+        };
+      }
+    }),
+  );
+  if (!allowOverride)
+    await db
+      .from("outreach_action_approvals")
+      .update({ consumed_at: new Date().toISOString() })
+      .eq("id", approvalId)
+      .eq("user_id", userId)
+      .is("consumed_at", null);
+  return {
+    action: "qualification_calls_batch",
+    result: {
+      started: outcomes.filter(
+        (item) => item.status === "started" || item.status === "scheduled",
+      ).length,
+      blocked: outcomes.filter(
+        (item) => item.status === "blocked" || item.status === "already_called",
+      ).length,
+      outcomes,
+    },
+  };
+}
+
+async function applyVoiceAgentConfiguration(
+  db: ReturnType<typeof createAdminClient>,
+  userId: string,
+  approvalId: string,
+  scope: Record<string, unknown>,
+) {
+  const params = (scope.input ?? {}) as VoiceAgentInput;
+  const { data: connection } = await db
+    .from("voice_connections")
+    .select(
+      "id,encrypted_api_key,agent_id,webhook_version,call_start_hour,call_end_hour,calling_timezone,max_objection_attempts,booking_link_url,agent_management_mode",
+    )
+    .eq("user_id", userId)
+    .eq("id", String(scope.connectionId ?? ""))
+    .eq("provider", "bolna")
+    .eq("status", "active")
+    .maybeSingle();
+  if (!connection)
+    return {
+      error: "missing_bolna_connection",
+      message: "Bolna connection is no longer active.",
+    };
+  // Claim before crossing the provider boundary. Bolna agent create/update has
+  // no provider idempotency contract, so an ambiguous failure requires a new
+  // preview instead of risking a duplicate provider-side mutation.
+  const { data: claimedApproval } = await db
+    .from("outreach_action_approvals")
+    .update({ consumed_at: new Date().toISOString() })
+    .eq("id", approvalId)
+    .eq("user_id", userId)
+    .is("consumed_at", null)
+    .select("id")
+    .maybeSingle();
+  if (!claimedApproval)
+    return {
+      error: "approval_already_used",
+      message: "This agent configuration approval was already used. Preview again before retrying.",
+    };
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (!appUrl)
+    return {
+      error: "voice_agent_apply_failed",
+      message:
+        "A secure public application URL is required to configure Bolna webhooks.",
+    };
+  try {
+    const origin = new URL(appUrl).origin;
+    if (!origin.startsWith("https://"))
+      return {
+        error: "voice_agent_apply_failed",
+        message:
+          "A secure HTTPS application URL is required to configure Bolna webhooks.",
+      };
+    const signature = voiceWebhookSignature(
+      String(connection.id),
+      Number(connection.webhook_version ?? 1),
+    );
+    const config = {
+      agentName: "SalesEngAI Qualification Agent",
+      webhookUrl: `${origin}/api/webhooks/bolna/${connection.id}?signature=${signature}`,
+      actionWebhookUrl: `${origin}/api/webhooks/bolna/${connection.id}/actions?signature=${signature}`,
+      language: params.language,
+      maxCallSeconds: params.max_call_seconds,
+      maxTurns: params.max_turns,
+      maxObjectionAttempts: Number(connection.max_objection_attempts ?? 1),
+      callStartHour: Number(connection.call_start_hour ?? 9),
+      callEndHour: Number(connection.call_end_hour ?? 18),
+      agentWelcomeMessage: params.welcome_message,
+      voiceName: params.voice.name,
+      voiceId: params.voice.voice_id,
+      synthesizerProvider: params.voice.provider,
+      synthesizerModel: params.voice.model,
+      transferEnabled: Boolean(params.transfer_number),
+      transferPhone: params.transfer_number ?? undefined,
+      additionalInstructions: params.prompt,
+    };
+    const apiKey = decryptCredential(String(connection.encrypted_api_key));
+    const existingAgent =
+      connection.agent_id &&
+      !String(connection.agent_id).startsWith("provisioning-")
+        ? String(connection.agent_id)
+        : null;
+    const response =
+      params.operation === "create" || !existingAgent
+        ? await provisionBolnaQualificationAgent(apiKey, config)
+        : await updateBolnaQualificationAgent(apiKey, existingAgent, config);
+    const agentId = String(
+      (response as { agent_id?: string; id?: string }).agent_id ??
+        (response as { id?: string }).id ??
+        existingAgent,
+    );
+    await db
+      .from("voice_connections")
+      .update({
+        agent_id: agentId,
+        agent_management_mode: "managed",
+        default_language: params.language,
+        max_call_seconds: params.max_call_seconds,
+        max_turns: params.max_turns,
+        human_transfer_phone: params.transfer_number ?? null,
+        transfer_enabled: Boolean(params.transfer_number),
+        agent_options: {
+          voiceName: params.voice.name,
+          voiceId: params.voice.voice_id,
+          synthesizerProvider: params.voice.provider,
+          synthesizerModel: params.voice.model,
+          agentWelcomeMessage: params.welcome_message,
+          tone: params.tone,
+          additionalInstructions: params.prompt,
+        },
+        agent_config_synced_at: new Date().toISOString(),
+        agent_config_error: null,
+      })
+      .eq("id", connection.id)
+      .eq("user_id", userId);
+    return {
+      action: "voice_agent_configuration",
+      result: { agent_id: agentId, status: "configured" },
+    };
+  } catch {
+    return {
+      error: "voice_agent_apply_failed",
+      message:
+        "Bolna could not apply this configuration. Review the connection and preview again.",
+    };
+  }
 }

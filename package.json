@@ -11,7 +11,7 @@
     "build": "cross-env NODE_ENV=production NODE_OPTIONS=--max_old_space_size=4096 next build",
     "start": "next start -H 0.0.0.0",
     "lint": "eslint",
-    "test": "node --test --experimental-strip-types tests/*.test.ts tests/evals/*.test.ts",
+    "test": "node --import tsx --test tests/*.test.ts tests/evals/*.test.ts",
     "db:push": "supabase db push",
     "db:bundle": "node scripts/bundle-schema.mjs",
     "test:integration": "node --import tsx --test tests/integration/*.test.ts",
@@ -22,6 +22,7 @@
     "@ai-sdk/anthropic": "^3.0.116",
     "@ai-sdk/openai": "^3.0.104",
     "@base-ui/react": "^1.4.1",
+    "@sentry/nextjs": "^10.72.0",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.116.0",
     "@types/pg": "^8.23.1",
@@ -58,7 +59,6 @@
     "eslint-config-next": "16.2.6",
     "supabase": "^2.115.0",
     "tailwindcss": "^4",
-    "tsx": "^4.19.0",
     "typescript": "^5.9.3"
   }
 }

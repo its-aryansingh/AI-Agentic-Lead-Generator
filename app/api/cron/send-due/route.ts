@@ -15,13 +15,13 @@
 import { NextResponse } from "next/server"
 
 import { createAdminClient } from "@/lib/supabase/server"
-import { sendGmail, warmupCap } from "@/lib/providers/gmail"
+import { sendGmail, warmupCap, classifyGmailError } from "@/lib/providers/gmail"
+import { decryptCredential } from "@/lib/credential-crypto"
 import {
   appendComplianceFooter,
   makeUnsubToken,
   sha256Email,
 } from "@/lib/email-compliance"
-import { pickRotationMailbox } from "@/lib/mailbox-rotation-core"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -38,92 +38,43 @@ export async function POST(req: Request) {
   if (!authorized(req)) return new NextResponse("Forbidden", { status: 403 })
   const supabase = createAdminClient()
 
-  // Active campaigns with their mailbox + rotation flag.
+  // Active campaigns with their mailbox.
   const { data: campaigns } = await supabase
     .from("campaigns")
     .select(
-      "id,user_id,mailbox_id,daily_cap,send_window_start_hour,send_window_end_hour,mailbox_rotation",
+      "id,user_id,mailbox_id,daily_cap",
     )
     .eq("status", "active")
     .limit(100)
 
   let totalSent = 0
-  const nowHour = new Date().getUTCHours() // simplification; campaign tz refinement in v1.2
-
   for (const c of campaigns ?? []) {
-    // Send window check (coarse — UTC hour). v1.2 will honor campaign timezone.
-    const startH = (c.send_window_start_hour as number) ?? 9
-    const endH = (c.send_window_end_hour as number) ?? 17
-    if (nowHour < startH || nowHour >= endH) continue
-
-    // Mailbox selection. Two modes:
-    //   - Rotation OFF (default): legacy behaviour. Single mailbox by id.
-    //   - Rotation ON: fetch ALL of the user's active mailboxes; pure
-    //     selector picks the least-loaded each tick. Self-balancing,
-    //     no per-campaign cursor needed.
-    const MAILBOX_COLS =
-      "id,email_address,oauth_refresh_token,daily_send_limit,daily_sent,last_reset_at,warmup_started_at,physical_address,status"
-
-    let mailbox: Record<string, unknown> | null = null
-
-    if (c.mailbox_rotation) {
-      const { data: pool } = await supabase
-        .from("mailboxes")
-        .select(MAILBOX_COLS)
-        .eq("user_id", c.user_id as string)
-        .eq("status", "active")
-        .limit(20)
-      const rows = (pool ?? []) as Record<string, unknown>[]
-      const candidates = rows.map((m) => ({
-        id: m.id as string,
-        daily_sent: ((m.daily_sent as number) ?? 0),
-        effective_cap: Math.min(
-          warmupCap(new Date(m.warmup_started_at as string)),
-          (m.daily_send_limit as number) ?? 10,
-          (c.daily_cap as number) ?? 30,
-        ),
-        warmup_started_at_ms: Date.parse(m.warmup_started_at as string),
-      }))
-      const choice = pickRotationMailbox(candidates)
-      if (!choice) continue
-      mailbox = rows.find((m) => m.id === choice.id) ?? null
-    } else {
-      const { data: single } = await supabase
-        .from("mailboxes")
-        .select(MAILBOX_COLS)
-        .eq("id", c.mailbox_id as string)
-        .maybeSingle()
-      mailbox = (single as Record<string, unknown> | null) ?? null
-    }
-
-    if (!mailbox || (mailbox.status as string) !== "active") continue
-
-    // Reset daily_sent at the start of a new UTC day.
-    let dailySent = (mailbox.daily_sent as number) ?? 0
-    const lastReset = new Date(mailbox.last_reset_at as string)
-    if (lastReset.toISOString().slice(0, 10) !== new Date().toISOString().slice(0, 10)) {
-      dailySent = 0
-      await supabase
-        .from("mailboxes")
-        .update({ daily_sent: 0, last_reset_at: new Date().toISOString() })
-        .eq("id", mailbox.id)
-    }
+    const { data: mailbox } = await supabase
+      .from("mailboxes")
+      .select(
+        "id,email_address,oauth_refresh_token_encrypted,daily_send_limit,daily_sent,last_reset_at,warmup_started_at,physical_address,status",
+      )
+      .eq("id", c.mailbox_id as string)
+      .eq("user_id", c.user_id as string)
+      .maybeSingle()
+    if (!mailbox || mailbox.status !== "active") continue
 
     const cap = Math.min(
       warmupCap(new Date(mailbox.warmup_started_at as string)),
       (mailbox.daily_send_limit as number) ?? 10,
       (c.daily_cap as number) ?? 30,
     )
-    const remaining = Math.max(0, cap - dailySent)
-    if (remaining === 0) continue
+    if (cap === 0) continue
 
-    const { data: due } = await supabase
-      .from("campaign_recipients")
-      .select("id,email,subject,body")
-      .eq("campaign_id", c.id as string)
-      .eq("status", "scheduled")
-      .lte("scheduled_for", new Date().toISOString())
-      .limit(remaining)
+    const { data: due, error: claimError } = await supabase.rpc(
+      "claim_campaign_recipients",
+      {
+        p_user_id: c.user_id as string,
+        p_campaign_id: c.id as string,
+        p_daily_cap: cap,
+      },
+    )
+    if (claimError) continue
 
     for (const r of due ?? []) {
       // Last-mile suppression check.
@@ -138,6 +89,8 @@ export async function POST(req: Request) {
           .from("campaign_recipients")
           .update({ status: "skipped" })
           .eq("id", r.id)
+          .eq("user_id", c.user_id as string)
+          .eq("status", "sending")
         continue
       }
 
@@ -151,7 +104,7 @@ export async function POST(req: Request) {
 
       try {
         const sent = await sendGmail({
-          refreshToken: mailbox.oauth_refresh_token as string,
+          refreshToken: decryptCredential(mailbox.oauth_refresh_token_encrypted as string),
           from: mailbox.email_address as string,
           to: r.email as string,
           subject: r.subject as string,
@@ -166,35 +119,36 @@ export async function POST(req: Request) {
             thread_id: sent.threadId,
           })
           .eq("id", r.id)
+          .eq("user_id", c.user_id as string)
+          .eq("status", "sending")
         await supabase.from("email_events").insert({
           recipient_id: r.id,
           user_id: c.user_id as string,
           event_type: "sent",
           payload: { mock: sent.mock },
         })
-        dailySent++
         totalSent++
       } catch (err) {
+        const gmailError=classifyGmailError(err)
+        if(gmailError==="auth")await supabase.from("mailboxes").update({status:"reconnect_required",last_error_code:gmailError,last_error_message:"Google authorization expired or was revoked"}).eq("id",mailbox.id).eq("user_id",c.user_id as string)
         await supabase
           .from("campaign_recipients")
           .update({
             status: "failed",
-            bounce_reason: err instanceof Error ? err.message : "send_failed",
+            bounce_reason: gmailError,
           })
           .eq("id", r.id)
+          .eq("user_id", c.user_id as string)
+          .eq("status", "sending")
         await supabase.from("email_events").insert({
           recipient_id: r.id,
           user_id: c.user_id as string,
           event_type: "failed",
         })
+        if(gmailError==="auth")break
       }
     }
 
-    // Persist the incremented counter.
-    await supabase
-      .from("mailboxes")
-      .update({ daily_sent: dailySent })
-      .eq("id", mailbox.id)
   }
 
   return NextResponse.json({ sent: totalSent })

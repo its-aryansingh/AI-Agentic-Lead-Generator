@@ -3,14 +3,6 @@ import { createClient } from "@/lib/supabase/server";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
-
-// Every page under /app reads the session cookie, so none of them can
-// be statically prerendered. Two earlier commits in this repo exist
-// only to add this line to the other dashboard routes after the
-// build crashed on them; these pages arrived from SalesEngAIMVP
-// without it.
-export const dynamic = "force-dynamic"
-
 type Check = {
   name: string;
   state: "ready" | "warning" | "blocked";

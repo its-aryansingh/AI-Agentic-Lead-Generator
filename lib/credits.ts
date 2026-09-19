@@ -12,6 +12,7 @@
 
 import { createAdminClient } from "@/lib/supabase/server"
 import { PLANS } from "@/lib/billing-shared"
+import { randomUUID } from "node:crypto"
 
 /**
  * Plan-default monthly credit grants. Sourced from the canonical paid PLANS
@@ -142,38 +143,40 @@ export async function deductCredits(opts: {
   count: number
   jobId?: string
   reason: string
+  idempotencyKey?: string
 }): Promise<{ ok: boolean; remaining: number; error?: string }> {
-  const { userId, count, jobId = "system", reason } = opts
+  const { userId, count, jobId, reason, idempotencyKey = randomUUID() } = opts
   const supabase = createAdminClient()
-
-  // Read current.
-  const { data: row } = await supabase
-    .from("users")
-    .select("credits_remaining")
-    .eq("id", userId)
-    .maybeSingle()
-  const current = (row?.credits_remaining as number | undefined) ?? 0
-  if (current < count) {
-    return {
-      ok: false,
-      remaining: current,
-      error: `Insufficient credits: ${current} < ${count}.`,
-    }
+  if (!Number.isInteger(count) || count <= 0) {
+    return { ok: false, remaining: 0, error: "Credit amount must be a positive integer." }
+  }
+  const { data, error } = await supabase.rpc("deduct_credits_atomic", {
+    p_user_id: userId,
+    p_amount: count,
+    p_reason: reason,
+    p_job_id: jobId ?? null,
+    p_idempotency_key: idempotencyKey,
+  })
+  const result = Array.isArray(data) ? data[0] : data
+  if (error || !result) {
+    return { ok: false, remaining: 0, error: error?.message ?? "Credit deduction failed." }
+  }
+  return {
+    ok: Boolean(result.ok),
+    remaining: Number(result.remaining ?? 0),
+    ...(result.error ? { error: String(result.error) } : {}),
   }
 
-  const next = current - count
-
+  /* Legacy non-atomic implementation retained below only for source-history
+     context; execution returns through the RPC above. */
+  /*
+  const current = 0
+  const next = 0
+  const updateErr: Error | null = null
+  const updated: { credits_remaining: number } | null = null
   // Conditional update — only succeeds if no concurrent run already
   // drained the balance. Without a stored procedure this is the best
   // we can do without a transaction layer.
-  const { data: updated, error: updateErr } = await supabase
-    .from("users")
-    .update({ credits_remaining: next })
-    .eq("id", userId)
-    .eq("credits_remaining", current)
-    .select("credits_remaining")
-    .maybeSingle()
-
   if (updateErr || !updated) {
     return {
       ok: false,
@@ -191,6 +194,7 @@ export async function deductCredits(opts: {
   })
 
   return { ok: true, remaining: next }
+  */
 }
 
 /**

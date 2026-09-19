@@ -7,7 +7,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { classifyReply, needsHuman } from "../lib/reply-classify.ts"
+import { classifyReply, needsHuman } from "@/lib/reply-classify"
+import {isInboundCandidate} from '@/lib/gmail-inbound'
 
 test("classify: unsubscribe request", async () => {
   const r = await classifyReply({ body: "Please remove me from your list." })
@@ -58,4 +59,10 @@ test("needsHuman: routes interested/question/objection to humans", () => {
   assert.equal(needsHuman("out_of_office"), false)
   assert.equal(needsHuman("not_interested"), false)
   assert.equal(needsHuman("other"), false)
+})
+
+test('Gmail polling excludes sent/self-addressed messages',()=>{
+  assert.equal(isInboundCandidate(['INBOX']),true)
+  assert.equal(isInboundCandidate(['INBOX','SENT']),false)
+  assert.equal(isInboundCandidate(['DRAFT']),false)
 })

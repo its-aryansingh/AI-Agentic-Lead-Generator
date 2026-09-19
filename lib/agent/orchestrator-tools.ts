@@ -14,12 +14,20 @@ import { runSpecialist } from "@/lib/agent/orchestrator";
 import type { SpecialistName } from "@/lib/agent/specialists";
 import {
   clarifyTool,
+  createOrUpdateVoiceAgentTool,
   enrichIntakeJobTool,
   enrichLeadTool,
+  enrichProspectsPublicTool,
   launchCampaignTool,
   listIntakeJobsTool,
   saveCandidatesToLeadsTool,
   searchLeadsTool,
+  scheduleLeadFollowupTool,
+  startQualificationCallsBatchTool,
+  startQualificationCallTool,
+  syncCrmLeadsTool,
+  getCallDetailsAndAnalyticsTool,
+  triggerOutreachRunTool,
   type ToolContext,
 } from "@/lib/agent/tools";
 import { createAutomation } from "@/lib/automations";
@@ -73,11 +81,19 @@ export function makeOrchestratorTools(ctx: ToolContext): ToolSet {
       "Delegate to the Outreach coordinator to run bulk enrichment (Sheet + CSV) or queue a real email campaign.",
     ),
     search_leads: searchLeadsTool(ctx),
+    create_or_update_voice_agent: createOrUpdateVoiceAgentTool(ctx),
+    start_qualification_calls_batch: startQualificationCallsBatchTool(ctx),
+    schedule_lead_followup: scheduleLeadFollowupTool(ctx),
+    sync_crm_leads: syncCrmLeadsTool(ctx),
+    get_call_details_and_analytics: getCallDetailsAndAnalyticsTool(ctx),
+    trigger_outreach_run: triggerOutreachRunTool(ctx),
     save_candidates_to_leads: saveCandidatesToLeadsTool(ctx),
     enrich_lead: enrichLeadTool(ctx),
+    enrich_prospects_public: enrichProspectsPublicTool(ctx),
     list_intake_jobs: listIntakeJobsTool(ctx),
     enrich_intake_job: enrichIntakeJobTool(ctx),
     launch_campaign: launchCampaignTool(ctx),
+    start_qualification_call: startQualificationCallTool(ctx),
     create_automation: tool({
       description:
         "Create a recurring automation: the AI team runs the given instruction automatically on a schedule (hourly/daily/weekly). Use when the user wants something to happen repeatedly, e.g. 'every Monday find 20 fintech CMOs and draft outreach'. Confirm the schedule with the user before creating.",
